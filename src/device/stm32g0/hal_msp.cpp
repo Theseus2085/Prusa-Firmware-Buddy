@@ -34,7 +34,7 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef *adcHandle) {
         /**ADC1 GPIO Configuration
             PA1     ------> ADC1_IN1.....Picked 1
             PA2     ------> ADC1_IN2.....Picked 0
-            PA4     ------> ADC1_IN4.....Tool Filament sensor
+            PA3     ------> ADC1_IN3.....Filament Width sensor
             PA5     ------> ADC1_IN5.....NTC 1
             PA7     ------> ADC1_IN7.....NTC internal
             PB0     ------> ADC1_IN8.....Heater current
@@ -42,7 +42,7 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef *adcHandle) {
             PB10     ------> ADC1_IN11...Meas 24 V
             */
 
-        GPIO_InitStruct.Pin = PICKED1_Pin | PICKED0_Pin | TFS_Pin | NTC_Pin | NTC_INTERNAL_Pin;
+        GPIO_InitStruct.Pin = PICKED1_Pin | PICKED0_Pin | FILWIDTH_Pin | NTC_Pin | NTC_INTERNAL_Pin;
         GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
         GPIO_InitStruct.Pull = GPIO_NOPULL;
         HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
@@ -82,7 +82,7 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef *adcHandle) {
         /**ADC1 GPIO Configuration
             PA1     ------> ADC1_IN1.....Picked 1
             PA2     ------> ADC1_IN2.....Picked 0
-            PA4     ------> ADC1_IN4.....Tool Filament sensor
+            PA3     ------> ADC1_IN3.....Filament Width sensor
             PA5     ------> ADC1_IN5.....NTC 1
             PA7     ------> ADC1_IN7.....NTC internal
             PB0     ------> ADC1_IN8.....Heater current
@@ -90,7 +90,7 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef *adcHandle) {
             PB10     ------> ADC1_IN11...Meas 24 V
             */
 
-        HAL_GPIO_DeInit(GPIOA, PICKED1_Pin | PICKED0_Pin | TFS_Pin | NTC_Pin | NTC_INTERNAL_Pin);
+        HAL_GPIO_DeInit(GPIOA, PICKED1_Pin | PICKED0_Pin | FILWIDTH_Pin | NTC_Pin | NTC_INTERNAL_Pin);
 
         HAL_GPIO_DeInit(GPIOB, HEATER_CURRENT_Pin | NTC2_Pin | MEAS_24V_Pin);
 

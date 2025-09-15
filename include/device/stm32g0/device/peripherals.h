@@ -53,8 +53,8 @@ void hw_spi2_init(void);
 #define MEAS_24V_GPIO_Port          GPIOB
 #define NTC_Pin                     GPIO_PIN_5
 #define NTC_GPIO_Port               GPIOA
-#define TFS_GPIO_Port               GPIOA
-#define TFS_Pin                     GPIO_PIN_4
+#define FILWIDTH_GPIO_Port          GPIOA
+#define FILWIDTH_Pin                GPIO_PIN_3
 #define NTC_INTERNAL_GPIO_Port      GPIOA
 #define NTC_INTERNAL_Pin            GPIO_PIN_7
 #define HEATER_PWM_Pin              GPIO_PIN_6
@@ -95,7 +95,7 @@ void hw_spi2_init(void);
 #define CTRL_LOCAL_REMOTE_GPIO_Port GPIOD
 #define HX717_SCK_Pin               GPIO_PIN_0
 #define HX717_SCK_GPIO_Port         GPIOA
-#define HX717_DATA_Pin              GPIO_PIN_3
+#define HX717_DATA_Pin              GPIO_PIN_4
 #define HX717_DATA_GPIO_Port        GPIOA
 #define STEPPER_MISO_Pin            GPIO_PIN_5
 #define STEPPER_MISO_GPIO_Port      GPIOD

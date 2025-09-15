@@ -122,6 +122,9 @@
 #define TEMP_HEATBREAK_PIN     MARLIN_PIN(TEMP_HEATBREAK) // Analog Input todo: why it is defined for all printers?
 #define TEMP_CHAMBER_PIN       MARLIN_PIN(AMBIENT) // Analog Input
 
+// Filament Width Sensor
+#define FILWIDTH_PIN           MARLIN_PIN(FILWIDTH) // Analog Input
+
 #if PRINTER_IS_PRUSA_iX()
 #define TEMP_PSU_PIN           MARLIN_PIN(TEMP_PSU)
 #define TEMP_AMBIENT_PIN       MARLIN_PIN(TEMP_AMBIENT)

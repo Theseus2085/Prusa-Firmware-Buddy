@@ -90,6 +90,9 @@
 #define TEMP_BOARD_PIN         MARLIN_PIN(TEMP_BOARD) // Analog Input
 #define TEMP_HEATBREAK_PIN     MARLIN_PIN(TEMP_HEATBREAK) // Analog Input
 
+// Filament Width Sensor
+#define FILWIDTH_PIN           MARLIN_PIN(FILWIDTH) // Analog Input
+
 //
 // Heaters / Fans
 //

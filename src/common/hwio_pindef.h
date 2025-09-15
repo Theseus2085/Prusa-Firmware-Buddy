@@ -244,8 +244,11 @@ inline constexpr SPI_HandleTypeDef *hw_get_spi_side_strip() {
     #define MARLIN_PORT_FAN1   MARLIN_PORT_E
     #define MARLIN_PIN_NR_FAN1 MARLIN_PIN_NR_9
 
+    #define MARLIN_PORT_FILWIDTH   MARLIN_PORT_A
+    #define MARLIN_PIN_NR_FILWIDTH MARLIN_PIN_NR_3 // ADC
+
     #define MARLIN_PORT_HW_IDENTIFY   MARLIN_PORT_A
-    #define MARLIN_PIN_NR_HW_IDENTIFY MARLIN_PIN_NR_3 // ADC, unused
+    #define MARLIN_PIN_NR_HW_IDENTIFY MARLIN_PIN_NR_4 // ADC, unused
 
     #if PRINTER_IS_PRUSA_iX()
         #define MARLIN_PORT_TEMP_PSU   MARLIN_PORT_A

@@ -47,6 +47,7 @@ if(BOARD_IS_MASTER_BOARD)
             Marlin/Marlin/src/feature/bedlevel/ubl/ubl_motion.cpp
             Marlin/Marlin/src/feature/binary_protocol.cpp
             Marlin/Marlin/src/feature/cancel_object.cpp
+            Marlin/Marlin/src/feature/filwidth.cpp
             Marlin/Marlin/src/feature/host_actions.cpp
             Marlin/Marlin/src/feature/input_shaper/input_shaper.cpp
             Marlin/Marlin/src/feature/input_shaper/input_shaper_config.cpp
@@ -99,6 +100,7 @@ if(BOARD_IS_MASTER_BOARD)
             Marlin/Marlin/src/gcode/control/M999.cpp
             Marlin/Marlin/src/gcode/eeprom/M500-M504.cpp
             Marlin/Marlin/src/gcode/feature/advance/M900.cpp
+            Marlin/Marlin/src/gcode/feature/filwidth/M404-M407.cpp
             Marlin/Marlin/src/gcode/feature/i2c/M260_M261.cpp
             Marlin/Marlin/src/gcode/feature/input_shaper/M593.cpp
             Marlin/Marlin/src/gcode/feature/input_shaper/M74.cpp
