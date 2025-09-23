@@ -15,6 +15,7 @@ if(BOARD IN_LIST BUDDY_BOARDS)
             enum_array.cpp
             error_code_mangle.cpp
             ExtInterruptHandler.cpp
+            filament_width_sensor.cpp
             filename_type.cpp
             filepath_operation.cpp
             footer_def.cpp

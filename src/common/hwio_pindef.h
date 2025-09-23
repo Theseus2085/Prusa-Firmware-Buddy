@@ -247,6 +247,9 @@ inline constexpr SPI_HandleTypeDef *hw_get_spi_side_strip() {
     #define MARLIN_PORT_HW_IDENTIFY   MARLIN_PORT_A
     #define MARLIN_PIN_NR_HW_IDENTIFY MARLIN_PIN_NR_3 // ADC, unused
 
+    #define MARLIN_PORT_PE_8   MARLIN_PORT_E
+    #define MARLIN_PIN_NR_PE_8 MARLIN_PIN_NR_8
+
     #if PRINTER_IS_PRUSA_iX()
         #define MARLIN_PORT_TEMP_PSU   MARLIN_PORT_A
         #define MARLIN_PIN_NR_TEMP_PSU MARLIN_PIN_NR_4 // ADC
@@ -295,7 +298,8 @@ inline constexpr SPI_HandleTypeDef *hw_get_spi_side_strip() {
             MACRO_FUNCTION(buddy::hw::InputPin, jogWheelENC, buddy::hw::IoPort::E COMMA buddy::hw::IoPin::p12, IMode::input COMMA Pull::up, buddy::hw::noHandler) \
             MACRO_FUNCTION(buddy::hw::OutputPin, extFlashCs, buddy::hw::IoPort::D COMMA buddy::hw::IoPin::p7, Pin::State::high COMMA OMode::pushPull COMMA OSpeed::high, buddy::hw::noHandler) \
             MACRO_FUNCTION(buddy::hw::InputPin, fanPrintTach, buddy::hw::IoPort::E COMMA buddy::hw::IoPin::p10, IMode::input COMMA Pull::up, buddy::hw::noHandler) \
-            MACRO_FUNCTION(buddy::hw::InputPin, fanHeatBreakTach, buddy::hw::IoPort::E COMMA buddy::hw::IoPin::p14, IMode::input COMMA Pull::up, buddy::hw::noHandler)
+            MACRO_FUNCTION(buddy::hw::InputPin, fanHeatBreakTach, buddy::hw::IoPort::E COMMA buddy::hw::IoPin::p14, IMode::input COMMA Pull::up, buddy::hw::noHandler) \
+            MACRO_FUNCTION(buddy::hw::InputPin, filamentWidthSensor, buddy::hw::IoPort::E COMMA buddy::hw::IoPin::p8, IMode::input COMMA Pull::up, buddy::hw::noHandler) \ #add Pin definition for Filwidth pin on pin PE_8 simon
     #elif (BOARD_IS_XBUDDY() && PRINTER_IS_PRUSA_iX())
         #define PIN_TABLE_BOARD_SPECIFIC(MACRO_FUNCTION) \
             MACRO_FUNCTION(buddy::hw::OutputPin, heaterEnable, BUDDY_PIN(HEATER_ENABLE), Pin::State::low COMMA OMode::pushPull COMMA OSpeed::low, buddy::hw::noHandler) \

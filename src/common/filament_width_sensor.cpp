@@ -1,5 +1,6 @@
 #include "filament_width_sensor.h"
 #include "hwio_pindef.h"
+#include "hwio.h"
 #include "marlin_server.hpp"
 #include "../Marlin/src/feature/filwidth.h"
 #include "../Marlin/src/module/planner.h"
@@ -8,7 +9,7 @@
 // Initialize communication with your digital sensor
 void filament_width_sensor_init() {
     // Set up the pin
-    hwio_configure_pin(filamentWidthSensor);
+    hwio_configure_pin(FILWIDTH_PIN);
 
     // Initialize your digital sensor's communication protocol
     // This depends on your specific sensor's requirements

@@ -42,6 +42,7 @@
 #include "tasks.hpp"
 #include "Marlin/src/module/planner.h"
 #include <option/filament_sensor.h>
+#include "filament_width_sensor.h" //include new filament sensor feature simon
 
 #include <tusb.h>
 
@@ -185,8 +186,10 @@ static void app_setup(void) {
     buddy::hw::hx717mux.init();
     #endif
 #endif
+#if ENABLED(FILAMENT_WIDTH_SENSOR) // initialize filament width sensor simon
 
-    setup();
+    filament_width_sensor_init();
+#endif
 }
 
 void app_run(void) {
@@ -213,6 +216,9 @@ void app_run(void) {
         metric_record_integer(&metric_cpu_usage, osGetCPUUsage());
         loop();
         marlin_server::loop();
+#if ENABLED(FILAMENT_WIDTH_SENSOR) // update filament width sensor loop simon
+        filament_width_sensor_update();
+#endif
     }
 }
 
