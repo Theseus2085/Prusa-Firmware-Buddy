@@ -161,5 +161,5 @@
 #endif
 
 #if ENABLED(FILAMENT_WIDTH_SENSOR)
-  #define FILWIDTH_PIN MARLIN_PIN(PE_8)
+  #define FILWIDTH_PIN MARLIN_PIN(FilamentWidthSensor)
 #endif
