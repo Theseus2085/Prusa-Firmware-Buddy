@@ -24,13 +24,13 @@ This file is generated automatically so don't edit it directly
 - Led: logging::Severity::info, src/gui/led_animations/printer_animation_state.cpp
 - Loadcell: logging::Severity::info, src/common/loadcell.cpp
 - MMU2: logging::Severity::info, src/common/appmain.cpp
-- Marlin: logging::Severity::info, src/common/marlin_log_component.cpp
 - MarlinClient: logging::Severity::info, src/common/marlin_client.cpp
+- Marlin: logging::Severity::info, src/common/marlin_log_component.cpp
 - MarlinServer: logging::Severity::info, src/common/marlin_server.cpp
 - MediaPrefetch: logging::Severity::debug, src/common/media_prefetch/media_prefetch.cpp
 - Metrics: logging::Severity::info, src/common/metric.cpp
-- Modbus: logging::Severity::info, src/puppies/PuppyModbus.cpp
 - ModbusControl: logging::Severity::info, src/puppy/dwarf/modbus/ModbusControl.cpp
+- Modbus: logging::Severity::info, src/puppies/PuppyModbus.cpp
 - ModbusFIFODecoder: logging::Severity::info, src/puppies/fifo_decoder.cpp
 - ModbusFIFOEncoder: logging::Severity::info, src/puppy/dwarf/fifo_encoder.cpp
 - ModbusFIFOHandlers: logging::Severity::debug, src/puppy/dwarf/modbus/ModbusFIFOHandlers.cpp

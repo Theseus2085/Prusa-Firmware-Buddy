@@ -2110,7 +2110,7 @@
  *
  * Note: May require analog pins to be defined for other boards.
  */
-//#define FILAMENT_WIDTH_SENSOR
+#define FILAMENT_WIDTH_SENSOR
 
 #if ENABLED(FILAMENT_WIDTH_SENSOR)
     #define FILAMENT_SENSOR_EXTRUDER_NUM 0 // Index of the extruder that has the filament sensor. :[0,1,2,3,4]
