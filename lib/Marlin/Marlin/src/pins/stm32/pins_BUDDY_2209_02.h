@@ -122,6 +122,12 @@
 #define TEMP_HEATBREAK_PIN     MARLIN_PIN(TEMP_HEATBREAK) // Analog Input todo: why it is defined for all printers?
 #define TEMP_CHAMBER_PIN       MARLIN_PIN(AMBIENT) // Analog Input
 
+#if BOARD_IS_XBUDDY()
+  #ifndef FILWIDTH_PIN
+    #define FILWIDTH_PIN TEMP_0_PIN // Placeholder analog pin; actual readings come from I2C sensor.
+  #endif
+#endif
+
 #if PRINTER_IS_PRUSA_iX()
 #define TEMP_PSU_PIN           MARLIN_PIN(TEMP_PSU)
 #define TEMP_AMBIENT_PIN       MARLIN_PIN(TEMP_AMBIENT)

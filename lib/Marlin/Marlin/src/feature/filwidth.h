@@ -28,14 +28,17 @@ class FilamentWidthSensor {
 public:
   static constexpr int MMD_CM = MAX_MEASUREMENT_DELAY + 1, MMD_MM = MMD_CM * 10;
   static bool enabled;              // (M405-M406) Filament Width Sensor ON/OFF.
-  static uint32_t accum;            // ADC accumulator
-  static uint16_t raw;              // Measured filament diameter - one extruder only
   static float nominal_mm,          // (M104) Nominal filament width
                measured_mm,         // Measured filament diameter
                e_count, delay_dist;
   static uint8_t meas_delay_cm;     // Distance delay setting
   static int8_t ratios[MMD_CM],     // Ring buffer to delay measurement. (Extruder factor minus 100)
                 index_r, index_w;   // Indexes into ring buffer
+
+#if DISABLED(FILWIDTH_SENSOR_USE_I2C)
+  static uint32_t accum;            // ADC accumulator
+  static uint16_t raw;              // Measured filament diameter - one extruder only
+#endif
 
   FilamentWidthSensor() { init(); }
   static void init();
@@ -59,6 +62,10 @@ public:
            ? int(100.0f * nominal_mm / measured_mm) - 100 : 0;
   }
 
+#if ENABLED(FILWIDTH_SENSOR_USE_I2C)
+  /// Poll the external filament-width sensor over I2C. Returns true on success.
+  static bool update_from_sensor();
+#else
   // Apply a single ADC reading to the raw value
   static void accumulate(const uint16_t adc) {
     if (adc > 102)  // Ignore ADC under 0.5 volts
@@ -75,6 +82,7 @@ public:
 
   // Update mm from the raw measurement
   static inline void update_measured_mm() { measured_mm = raw_to_mm(); }
+#endif
 
   // Update ring buffer used to delay filament measurements
   static inline void advance_e(const float &e_move) {

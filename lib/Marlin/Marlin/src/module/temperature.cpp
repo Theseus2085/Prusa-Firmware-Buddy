@@ -2226,7 +2226,7 @@ void Temperature::updateTemperaturesFromRawValues() {
   #if ENABLED(TEMP_SENSOR_1_AS_REDUNDANT)
     redundant_temperature = analog_to_celsius_hotend(redundant_temperature_raw, 1);
   #endif
-  #if ENABLED(FILAMENT_WIDTH_SENSOR)
+  #if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
     filwidth.update_measured_mm();
   #endif
   #if HAS_TEMP_BOARD
@@ -2420,7 +2420,7 @@ void Temperature::init() {
   #if HAS_TEMP_HEATBREAK
     HAL_ANALOG_SELECT(TEMP_HEATBREAK_PIN);
   #endif
-  #if ENABLED(FILAMENT_WIDTH_SENSOR)
+  #if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
     HAL_ANALOG_SELECT(FILWIDTH_PIN);
   #endif
   #if HAS_ADC_BUTTONS
@@ -3037,8 +3037,8 @@ void Temperature::readings_ready() {
   // Update the raw values if they've been read. Else we could be updating them during reading.
   if (!temp_meas_ready) set_current_temp_raw();
 
-  // Filament Sensor - can be read any time since IIR filtering is used
-  #if ENABLED(FILAMENT_WIDTH_SENSOR)
+  // Filament Sensor - update filtered values for ADC-based sensors
+  #if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
     filwidth.reading_ready();
   #endif
 
@@ -3646,13 +3646,20 @@ void Temperature::isr() {
     #endif
 
     #if ENABLED(FILAMENT_WIDTH_SENSOR)
-      case Prepare_FILWIDTH: HAL_START_ADC(FILWIDTH_PIN); break;
-      case Measure_FILWIDTH:
-        if (!HAL_ADC_READY())
-          next_sensor_state = adc_sensor_state; // redo this state
-        else
-          filwidth.accumulate(HAL_READ_ADC());
-      break;
+      #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
+        case Prepare_FILWIDTH: break;
+        case Measure_FILWIDTH:
+          filwidth.update_from_sensor();
+        break;
+      #else
+        case Prepare_FILWIDTH: HAL_START_ADC(FILWIDTH_PIN); break;
+        case Measure_FILWIDTH:
+          if (!HAL_ADC_READY())
+            next_sensor_state = adc_sensor_state; // redo this state
+          else
+            filwidth.accumulate(HAL_READ_ADC());
+        break;
+      #endif
     #endif
 
     #if HAS_JOY_ADC_X

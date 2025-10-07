@@ -26,11 +26,63 @@
 
 #include "filwidth.h"
 
+#if ENABLED(FILWIDTH_SENSOR_USE_I2C)
+  #include "i2c.hpp"
+
+  namespace {
+
+    constexpr uint8_t sensor_address = FILWIDTH_SENSOR_I2C_ADDRESS;
+    constexpr uint8_t sensor_digits = FILWIDTH_SENSOR_DIGITS;
+    constexpr uint32_t sensor_timeout_ms = FILWIDTH_SENSOR_TIMEOUT_MS;
+
+    bool decode_sensor_digits(const uint8_t *buffer, const uint8_t length, float &out_mm) {
+      if (!buffer) return false;
+
+      uint8_t digits_collected = 0;
+      uint8_t digits[sensor_digits] = { 0 };
+
+      for (uint8_t i = 0; i < length && digits_collected < sensor_digits; ++i) {
+        const uint8_t value = buffer[i];
+
+        if (value == '\n' || value == '\r' || value == ' ') continue;
+        if (value == '.') continue;
+
+        uint8_t digit;
+        if (value <= 9) {
+          digit = value;
+        }
+        else if (value >= '0' && value <= '9') {
+          digit = value - '0';
+        }
+        else {
+          return false;
+        }
+
+        digits[digits_collected++] = digit;
+      }
+
+      if (digits_collected != sensor_digits)
+        return false;
+
+      float result = digits[0];
+      float scale = 0.1f;
+      for (uint8_t i = 1; i < sensor_digits; ++i, scale *= 0.1f)
+        result += digits[i] * scale;
+
+      if (!WITHIN(result, 0.5f, 3.5f))
+        return false;
+
+      out_mm = result;
+      return true;
+    }
+
+  } // namespace
+
+#endif
+
 FilamentWidthSensor filwidth;
 
 bool FilamentWidthSensor::enabled; // = false;                          // (M405-M406) Filament Width Sensor ON/OFF.
-uint32_t FilamentWidthSensor::accum; // = 0                             // ADC accumulator
-uint16_t FilamentWidthSensor::raw; // = 0                               // Measured filament diameter - one extruder only
 float FilamentWidthSensor::nominal_mm = DEFAULT_NOMINAL_FILAMENT_DIA,   // (M104) Nominal filament width
       FilamentWidthSensor::measured_mm = DEFAULT_MEASURED_FILAMENT_DIA, // Measured filament diameter
       FilamentWidthSensor::e_count = 0,
@@ -40,10 +92,34 @@ int8_t FilamentWidthSensor::ratios[MAX_MEASUREMENT_DELAY + 1],          // Ring 
        FilamentWidthSensor::index_r,                                    // Indexes into ring buffer
        FilamentWidthSensor::index_w;
 
+#if DISABLED(FILWIDTH_SENSOR_USE_I2C)
+uint32_t FilamentWidthSensor::accum; // = 0                             // ADC accumulator
+uint16_t FilamentWidthSensor::raw; // = 0                               // Measured filament diameter - one extruder only
+#endif
+
 void FilamentWidthSensor::init() {
   const int8_t ratio = sample_to_size_ratio();
   for (uint8_t i = 0; i < COUNT(ratios); ++i) ratios[i] = ratio;
   index_r = index_w = 0;
 }
+
+#if ENABLED(FILWIDTH_SENSOR_USE_I2C)
+
+bool FilamentWidthSensor::update_from_sensor() {
+  uint8_t buffer[sensor_digits] = { 0 };
+
+  const auto result = i2c::Receive(I2C_HANDLE_FOR(io_expander2), (sensor_address << 1) | 0x1, buffer, sensor_digits, sensor_timeout_ms);
+  if (result != i2c::Result::ok)
+    return false;
+
+  float measured_value = measured_mm;
+  if (!decode_sensor_digits(buffer, sensor_digits, measured_value))
+    return false;
+
+  measured_mm = measured_value;
+  return true;
+}
+
+#endif
 
 #endif // FILAMENT_WIDTH_SENSOR
