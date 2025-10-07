@@ -50,22 +50,21 @@ void GcodeSuite::M405() {
   // unit than everything else, it uses parser.value_byte() instead of parser.value_linear_units().
   if (parser.seenval('D'))
     filwidth.set_delay_cm(parser.value_byte());
-
-  filwidth.enable(true);
 }
 
 /**
  * M406: Turn off filament sensor for control
  */
 void GcodeSuite::M406() {
-  filwidth.enable(false);
-  planner.calculate_volumetric_multipliers();   // Restore correct 'volumetric_multiplier' value
+  // No enable/disable needed for new sensor
+  planner.calculate_volumetric_multipliers();
 }
 
 /**
  * M407: Get measured filament diameter on serial output
  */
 void GcodeSuite::M407() {
+  filwidth.update_measured_mm();
   SERIAL_ECHOLNPAIR("Filament dia (measured mm):", filwidth.measured_mm);
 }
 
