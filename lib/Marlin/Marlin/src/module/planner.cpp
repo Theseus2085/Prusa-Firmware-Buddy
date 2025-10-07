@@ -1675,7 +1675,7 @@ bool Planner::_populate_block(block_t * const block,
 
   #if ENABLED(FILAMENT_WIDTH_SENSOR)
     if (extruder == FILAMENT_SENSOR_EXTRUDER_NUM)   // Only for extruder with filament sensor
-      filwidth.advance_e(delta_mm.e);
+  // filwidth.advance_e(delta_mm.e); // analog filament width sensor logic removed
   #endif
 
   // Calculate and limit speed in mm/sec for each axis

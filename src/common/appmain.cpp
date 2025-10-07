@@ -187,7 +187,7 @@ static void app_setup(void) {
 #endif
 #if ENABLED(FILAMENT_WIDTH_SENSOR) // initialize filament width sensor simon
 
-    filament_width_sensor_init();
+    // filament_width_sensor_init(); // removed, now handled by Marlin
 #endif
 }
 
@@ -216,7 +216,7 @@ void app_run(void) {
         loop();
         marlin_server::loop();
 #if ENABLED(FILAMENT_WIDTH_SENSOR) // update filament width sensor loop simon
-        filament_width_sensor_update();
+        // filament_width_sensor_update(); // removed, now handled by Marlin
 #endif
     }
 }

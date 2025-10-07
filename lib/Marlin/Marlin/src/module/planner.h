@@ -445,6 +445,7 @@ class Planner {
     static void calculate_volumetric_multipliers();
 
     #if ENABLED(FILAMENT_WIDTH_SENSOR)
+    public:
       void apply_filament_width_sensor(const int8_t encoded_ratio);
 
       static inline float volumetric_percent(const bool vol) {

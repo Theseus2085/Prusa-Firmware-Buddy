@@ -1610,7 +1610,7 @@ void Temperature::manage_heater() {
      * Dynamically set the volumetric multiplier based
      * on the delayed Filament Width measurement.
      */
-    filwidth.update_volumetric();
+  // filwidth.update_volumetric(); // analog filament width sensor logic removed
   #endif
 
   #if HAS_HEATED_BED
@@ -2421,7 +2421,7 @@ void Temperature::init() {
     HAL_ANALOG_SELECT(TEMP_HEATBREAK_PIN);
   #endif
   #if ENABLED(FILAMENT_WIDTH_SENSOR)
-    HAL_ANALOG_SELECT(FILWIDTH_PIN);
+  // HAL_ANALOG_SELECT(FILWIDTH_PIN); // analog filament width sensor logic removed
   #endif
   #if HAS_ADC_BUTTONS
     HAL_ANALOG_SELECT(ADC_KEYPAD_PIN);
@@ -3039,7 +3039,7 @@ void Temperature::readings_ready() {
 
   // Filament Sensor - can be read any time since IIR filtering is used
   #if ENABLED(FILAMENT_WIDTH_SENSOR)
-    filwidth.reading_ready();
+  // filwidth.reading_ready(); // analog filament width sensor logic removed
   #endif
 
   #if HOTENDS
@@ -3646,13 +3646,13 @@ void Temperature::isr() {
     #endif
 
     #if ENABLED(FILAMENT_WIDTH_SENSOR)
-      case Prepare_FILWIDTH: HAL_START_ADC(FILWIDTH_PIN); break;
-      case Measure_FILWIDTH:
-        if (!HAL_ADC_READY())
-          next_sensor_state = adc_sensor_state; // redo this state
-        else
-          filwidth.accumulate(HAL_READ_ADC());
-      break;
+      // case Prepare_FILWIDTH: HAL_START_ADC(FILWIDTH_PIN); break;
+      // case Measure_FILWIDTH:
+      //   if (!HAL_ADC_READY())
+      //     next_sensor_state = adc_sensor_state; // redo this state
+      //   else
+      //     filwidth.accumulate(HAL_READ_ADC());
+      // break;
     #endif
 
     #if HAS_JOY_ADC_X

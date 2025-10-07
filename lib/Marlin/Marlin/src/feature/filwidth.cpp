@@ -1,6 +1,23 @@
 // ...existing code...
-#include <stdint.h>
+#include "../inc/MarlinConfig.h"
 #include "filwidth.h"
+#include "i2c.hpp"
+#include <stdint.h>
+
+uint8_t FilamentWidthSensor::meas_delay_cm = 12; // Default 120mm from sensor to melt zone
+
+void FilamentWidthSensor::set_delay_cm(const uint8_t cm) {
+  meas_delay_cm = cm;
+}
+
+void FilamentWidthSensor::update_volumetric() {
+  // Use the latest measured_mm to update the extrusion multiplier
+  // This assumes planner.apply_filament_width_sensor exists and expects a ratio
+  if (measured_mm > 0.0f) {
+    int ratio = int(100.0f * nominal_mm / measured_mm) - 100;
+    planner.apply_filament_width_sensor(ratio);
+  }
+}
 
 uint8_t FilamentWidthSensor::meas_delay_cm = 12; // Default 120mm from sensor to melt zone
 
@@ -29,13 +46,7 @@ void FilamentWidthSensor::set_delay_cm(const uint8_t cm) {
  *
  */
 
-#include "../inc/MarlinConfig.h"
 
-
-#if ENABLED(FILAMENT_WIDTH_SENSOR)
-
-#include "filwidth.h"
-#include "i2c.hpp"
 
 FilamentWidthSensor filwidth;
 
@@ -77,4 +88,13 @@ void FilamentWidthSensor::update_measured_mm() {
   measured_mm = read_external_sensor();
 }
 
-#endif // FILAMENT_WIDTH_SENSOR
+
+void FilamentWidthSensor::update_volumetric() {
+  // Use the latest measured_mm to update the extrusion multiplier
+  // This assumes planner.apply_filament_width_sensor exists and expects a ratio
+  if (measured_mm > 0.0f) {
+    int ratio = int(100.0f * nominal_mm / measured_mm) - 100;
+    planner.apply_filament_width_sensor(ratio);
+  }
+}
+
