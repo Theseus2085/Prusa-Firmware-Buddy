@@ -1,22 +1,12 @@
 #include "PrusaGcodeSuite.hpp"
 #include "../../lib/Marlin/Marlin/src/gcode/parser.h"
 
-// THESE G-CODES ARE AVAILABLE ONLY ON XBUDDY AND XLBUDDY BOARDS
+// Legacy IO expander commands now emit an informative warning instead of interacting with removed hardware.
 
-static constexpr const char txt_failed_comm[] = " Error: Failed i2c communication\n";
+#include "../../lib/Marlin/Marlin/src/Marlin.h"
+#if HAS_I2C_EXPANDER()
 
-static std::optional<uint8_t> check_param(const char param, const char *gcode, uint16_t num_limit) {
-    if (!parser.seen(param)) {
-        SERIAL_ECHOLIST(gcode, " Bad request:", param, "<base10> parameter is missing\n");
-        return std::nullopt;
-    }
-    uint16_t num = parser.ushortval(param, 0); // ushort for check of B <0;255>
-    if (num >= num_limit) {
-        SERIAL_ECHOLIST(gcode, " Bad request", param, "<base10> parameter is out of range <0", num_limit - 1, ">\n");
-        return std::nullopt;
-    }
-    return num;
-}
+// Legacy IO expander commands now emit an informative warning instead of interacting with removed hardware.
 
 /** \addtogroup G-Codes
  * @{
@@ -44,18 +34,7 @@ static std::optional<uint8_t> check_param(const char param, const char *gcode, u
  *
  */
 void PrusaGcodeSuite::M262() {
-    static constexpr const char *gcode = "M262";
-    const auto pin_num = check_param('P', gcode, buddy::hw::TCA6408A::pin_count);
-    const auto val = check_param('B', gcode, 256);
-
-    if (!pin_num.has_value() || !val.has_value()) {
-        return;
-    }
-
-    if (!buddy::hw::io_expander2.update_register(buddy::hw::TCA6408A::Register::Config, val.value() ? 0xFF : 0, 0x1 << pin_num.value())) {
-        SERIAL_ECHOPAIR(gcode, txt_failed_comm);
-    }
-    return;
+    SERIAL_ECHOLNPGM("M262 disabled: IO expander not present.");
 }
 
 /**
@@ -78,33 +57,7 @@ void PrusaGcodeSuite::M262() {
  *
  */
 void PrusaGcodeSuite::M263() {
-    static constexpr const char *gcode = "M263";
-    uint8_t pin_mask = 0xFF; // Read whole register by default
-
-    const bool seen_P = parser.seen('P');
-    if (seen_P) {
-        if (const auto pin_num = check_param('P', gcode, buddy::hw::TCA6408A::pin_count)) {
-            pin_mask = 0x1 << pin_num.value();
-        } else {
-            return; // out_of_range returns but not_seen does not
-        }
-    }
-
-    const auto value = buddy::hw::io_expander2.read(pin_mask);
-    if (!value.has_value()) {
-        SERIAL_ECHOPAIR(gcode, txt_failed_comm);
-        return;
-    }
-
-    // Print out on Serial port
-    if (seen_P) {
-        SERIAL_ECHOPAIR("IO Expander Pin ", value.value() ? "HIGH" : "LOW");
-    } else {
-        SERIAL_ECHOPAIR("IO Expander Input Register: ", value.value());
-    }
-    SERIAL_EOL();
-
-    // PLACEHOLDER: Add your code here
+    SERIAL_ECHOLNPGM("M263 disabled: IO expander not present.");
 }
 
 /**
@@ -131,17 +84,7 @@ void PrusaGcodeSuite::M263() {
  *
  */
 void PrusaGcodeSuite::M264() {
-    static constexpr const char *gcode = "M264";
-    const auto pin_num = check_param('P', gcode, buddy::hw::TCA6408A::pin_count);
-    const auto val = check_param('B', gcode, 256);
-    if (!pin_num.has_value() || !val.has_value()) {
-        return;
-    }
-
-    if (buddy::hw::io_expander2.write(val.value() ? 0xFF : 0, 0x1 << pin_num.value())) {
-        return;
-    }
-    SERIAL_ECHOPAIR(gcode, txt_failed_comm);
+    SERIAL_ECHOLNPGM("M264 disabled: IO expander not present.");
 }
 
 /**
@@ -166,16 +109,7 @@ void PrusaGcodeSuite::M264() {
  *
  */
 void PrusaGcodeSuite::M265() {
-    static constexpr const char *gcode = "M265";
-    const auto pin_num = check_param('P', gcode, buddy::hw::TCA6408A::pin_count);
-    if (!pin_num.has_value()) {
-        return;
-    }
-
-    if (buddy::hw::io_expander2.toggle(pin_num.value())) {
-        return;
-    }
-    SERIAL_ECHOPAIR(gcode, txt_failed_comm);
+    SERIAL_ECHOLNPGM("M265 disabled: IO expander not present.");
 }
 
 /**
@@ -204,21 +138,7 @@ void PrusaGcodeSuite::M265() {
  *
  */
 void PrusaGcodeSuite::M267() {
-    static constexpr const char *gcode = "M267";
-    const auto reg = check_param('R', gcode, 4);
-    const auto val = check_param('B', gcode, 256);
-    if (!reg.has_value() || !val.has_value()) {
-        return;
-    }
-    if (reg.value() == 0) {
-        SERIAL_ECHOPAIR(gcode, " Aborted. Input register is read only.\n");
-        return;
-    }
-
-    if (buddy::hw::io_expander2.update_register(buddy::hw::TCA6408A::Register(reg.value()), val.value())) {
-        return;
-    }
-    SERIAL_ECHOPAIR(gcode, txt_failed_comm);
+    SERIAL_ECHOLNPGM("M267 disabled: IO expander not present.");
 }
 
 /**
@@ -245,18 +165,9 @@ void PrusaGcodeSuite::M267() {
  *
  */
 void PrusaGcodeSuite::M268() {
-    static constexpr const char *gcode = "M268";
-    const auto reg = check_param('R', gcode, 4);
-    if (!reg.has_value()) {
-        return;
-    }
-
-    uint8_t value;
-    if (buddy::hw::io_expander2.read_reg(buddy::hw::TCA6408A::Register(reg.value()), value)) {
-        SERIAL_ECHOLN(value);
-        return;
-    }
-    SERIAL_ECHOPAIR(gcode, txt_failed_comm);
+    SERIAL_ECHOLNPGM("M268 disabled: IO expander not present.");
 }
+
+#endif // HAS_I2C_EXPANDER()
 
 /** @}*/

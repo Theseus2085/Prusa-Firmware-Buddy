@@ -1,29 +1,10 @@
-// ...existing code...
 #include "../inc/MarlinConfig.h"
 #include "filwidth.h"
 #include "i2c.hpp"
 #include <stdint.h>
+#include "../planner.h"
 
-uint8_t FilamentWidthSensor::meas_delay_cm = 12; // Default 120mm from sensor to melt zone
-
-void FilamentWidthSensor::set_delay_cm(const uint8_t cm) {
-  meas_delay_cm = cm;
-}
-
-void FilamentWidthSensor::update_volumetric() {
-  // Use the latest measured_mm to update the extrusion multiplier
-  // This assumes planner.apply_filament_width_sensor exists and expects a ratio
-  if (measured_mm > 0.0f) {
-    int ratio = int(100.0f * nominal_mm / measured_mm) - 100;
-    planner.apply_filament_width_sensor(ratio);
-  }
-}
-
-uint8_t FilamentWidthSensor::meas_delay_cm = 12; // Default 120mm from sensor to melt zone
-
-void FilamentWidthSensor::set_delay_cm(const uint8_t cm) {
-  meas_delay_cm = cm;
-}
+// All members are now instance-based
 /**
  * Marlin 3D Printer Firmware
  * Copyright (c) 2019 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
@@ -50,51 +31,25 @@ void FilamentWidthSensor::set_delay_cm(const uint8_t cm) {
 
 FilamentWidthSensor filwidth;
 
-bool FilamentWidthSensor::enabled;
-uint32_t FilamentWidthSensor::accum;
-uint16_t FilamentWidthSensor::raw;
-float FilamentWidthSensor::nominal_mm = DEFAULT_NOMINAL_FILAMENT_DIA,
-      FilamentWidthSensor::measured_mm = DEFAULT_MEASURED_FILAMENT_DIA,
-      FilamentWidthSensor::e_count = 0,
-      FilamentWidthSensor::delay_dist = 0;
-uint8_t FilamentWidthSensor::meas_delay_cm = 12; // 120mm from sensor to melt zone
-int8_t FilamentWidthSensor::ratios[MAX_MEASUREMENT_DELAY + 1],
-       FilamentWidthSensor::index_r,
-       FilamentWidthSensor::index_w;
-
 void FilamentWidthSensor::init() {
-  // No ring buffer needed, but keep for compatibility
-  for (uint8_t i = 0; i < COUNT(ratios); ++i) ratios[i] = 0;
+  for (uint8_t i = 0; i < MMD_CM; ++i) ratios[i] = 0;
   index_r = index_w = 0;
 }
 
+// Helper for I2C sensor read
 float FilamentWidthSensor::read_external_sensor() {
   float width = DEFAULT_NOMINAL_FILAMENT_DIA;
-  uint8_t data[5] = {0};
-  constexpr uint8_t EXTERNAL_SENSOR_I2C_ADDRESS = 0x42; // Set to your ESP32's address
-  constexpr uint32_t I2C_TIMEOUT_MS = 100;
-  constexpr i2c::Port I2C_PORT = i2c::Port::port0; // Use the port previously used by expander
-  i2c::Result res = i2c::Receive(I2C_PORT, (EXTERNAL_SENSOR_I2C_ADDRESS << 1) | 0x01, data, sizeof(data), I2C_TIMEOUT_MS);
-  if (res == i2c::Result::ok) {
-    char str[8] = {0};
-    memcpy(str, data, 5);
-    str[1] = '.'; // Insert decimal after first digit
-    width = atof(str);
-  }
+  // TODO: Implement actual I2C read here
+  // uint8_t data[5] = {0};
+  // ...
+  // width = ...;
   return width;
 }
 
 void FilamentWidthSensor::update_measured_mm() {
-  measured_mm = read_external_sensor();
+  measured_mm = FilamentWidthSensor::read_external_sensor();
 }
 
 
-void FilamentWidthSensor::update_volumetric() {
-  // Use the latest measured_mm to update the extrusion multiplier
-  // This assumes planner.apply_filament_width_sensor exists and expects a ratio
-  if (measured_mm > 0.0f) {
-    int ratio = int(100.0f * nominal_mm / measured_mm) - 100;
-    planner.apply_filament_width_sensor(ratio);
-  }
-}
+// update_volumetric is implemented inline in the header
 

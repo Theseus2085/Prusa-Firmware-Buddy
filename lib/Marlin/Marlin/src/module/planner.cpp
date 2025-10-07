@@ -1675,11 +1675,11 @@ bool Planner::_populate_block(block_t * const block,
 
   #if ENABLED(FILAMENT_WIDTH_SENSOR)
     if (extruder == FILAMENT_SENSOR_EXTRUDER_NUM)   // Only for extruder with filament sensor
-  // filwidth.advance_e(delta_mm.e); // analog filament width sensor logic removed
+      filwidth.advance_e(delta_mm.e);
   #endif
 
   // Calculate and limit speed in mm/sec for each axis
-  xyze_float_t current_speed;
+  float current_speed[XYZE_N] = {0};
   float speed_factor = 1.0f; // factor <1 decreases speed
 
   #ifdef COREXY_CONVERT_LIMITS
@@ -1694,7 +1694,7 @@ bool Planner::_populate_block(block_t * const block,
   #else
     LOOP_XY(i) {
       const float delta_mm_i = delta_mm[i];
-      const feedRate_t cs = ABS(current_speed[i] = delta_mm_i * inverse_secs);
+  const feedRate_t cs = ABS(current_speed[i] = delta_mm_i * inverse_secs);
       if (cs > settings.max_feedrate_mm_s[i]) NOMORE(speed_factor, settings.max_feedrate_mm_s[i] / cs);
     }
   #endif
@@ -1748,7 +1748,7 @@ bool Planner::_populate_block(block_t * const block,
 
   // Correct the speed
   if (speed_factor < 1.0f) {
-    current_speed *= speed_factor;
+  for (int i = 0; i < XYZE_N; i++) current_speed[i] *= speed_factor;
   #if ENABLED(S_CURVE_ACCELERATION)
     block->nominal_rate *= speed_factor;
   #endif
@@ -1927,9 +1927,9 @@ bool Planner::_populate_block(block_t * const block,
       LOOP_XYZE(i)
     #endif
     {
-      const float jerk = ABS(current_speed[i]),   // cs : Starting from zero, change in speed for this axis
-                  maxj = settings.max_jerk[i];             // mj : The max jerk setting for this axis
-      if (jerk > maxj) {                          // cs > mj : New current speed too fast?
+  const float jerk = ABS(current_speed[i]);   // cs : Starting from zero, change in speed for this axis
+  float maxj = settings.max_jerk[i];          // mj : The max jerk setting for this axis
+  if (jerk > maxj) {                          // cs > mj : New current speed too fast?
         if (limited) {                            // limited already?
           const float mjerk = block->nominal_speed * maxj; // ns*mj
           if (jerk * safe_speed > mjerk) safe_speed = mjerk / jerk; // ns*mj/cs
@@ -2028,7 +2028,7 @@ bool Planner::_populate_block(block_t * const block,
   block->flag.set_nominal(sq(block->nominal_speed) <= v_allowable_sqr);
 
   // Update previous path unit_vector and nominal speed
-  previous_speed = current_speed;
+  for (int i = 0; i < XYZE_N; i++) previous_speed[i] = current_speed[i];
   previous_nominal_speed = block->nominal_speed;
 
   #if ENABLED(CRASH_RECOVERY)

@@ -1,4 +1,4 @@
-target_sources(firmware PRIVATE safety_timer.cpp)
+target_sources(firmware PRIVATE filwidth.cpp safety_timer.cpp)
 
 if(HAS_CHAMBER_API)
   add_subdirectory(chamber)

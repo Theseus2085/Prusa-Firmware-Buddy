@@ -121,14 +121,9 @@ void TWIBus::addstring(char str[]) {
 void TWIBus::send() {
   debug(F("send"), addr);
   
-  if (addr == buddy::hw::io_expander2.fixed_addr) [[unlikely]] {
-    // Only full byte can be written here
-    buddy::hw::io_expander2.write(buffer[0]);
-  } else [[likely]] 
-  {
-    i2c::Result ret = i2c::Transmit(I2C_HANDLE_FOR(gcode), addr << 1, buffer, buffer_s, i2c_timeout_ms);
-    check_hal_response(ret);
-  }
+  // Only I2C transmit supported, IO expander removed
+  i2c::Result ret = i2c::Transmit(I2C_HANDLE_FOR(gcode), addr << 1, buffer, buffer_s, i2c_timeout_ms);
+  check_hal_response(ret);
 
   reset();
 }
@@ -210,24 +205,10 @@ bool TWIBus::request(const uint8_t bytes) {
 
   flush();
 
-  if (addr == buddy::hw::io_expander2.fixed_addr) [[unlikely]] {
-    const auto byte = buddy::hw::io_expander2.read();
-    if (!byte.has_value()) {
-      SERIAL_ECHO_MSG("I/O Expander: Read failure");
-      return false;
-    }
-    
-    read_buffer[0] = byte.value();
-    for (uint8_t i = 1; i < bytes; i++) {
-      read_buffer[i] = 0;
-    }
-  } else [[likely]]
-  {
-    i2c::Result ret = i2c::Receive(I2C_HANDLE_FOR(gcode), addr << 1 | 0x1, read_buffer, bytes, i2c_timeout_ms);
-
-    if (!check_hal_response(ret)) {
-      return false;
-    }
+  // Only I2C receive supported, IO expander removed
+  i2c::Result ret = i2c::Receive(I2C_HANDLE_FOR(gcode), addr << 1 | 0x1, read_buffer, bytes, i2c_timeout_ms);
+  if (!check_hal_response(ret)) {
+    return false;
   }
 
   read_buffer_available = bytes;

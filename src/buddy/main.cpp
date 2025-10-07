@@ -492,10 +492,7 @@ extern "C" void main_cpp(void) {
     }
 #endif
 
-#if HAS_I2C_EXPANDER()
-    // I2C IO Expander have to be initialized after Configuration Store
-    buddy::hw::io_expander2.initialize();
-#endif
+    // IO expander legacy logic removed
 
     osThreadCCMDef(defaultTask, StartDefaultTask, TASK_PRIORITY_DEFAULT_TASK, 0, 1152);
     defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);

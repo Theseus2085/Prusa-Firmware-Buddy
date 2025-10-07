@@ -655,50 +655,9 @@ void send_notifications_to_clients() {
     }
 }
 
-#if HAS_I2C_EXPANDER()
-
-// Used to avoid multiple triggering of pressed buttons.
-static uint8_t io_expander_button_trigger_check(uint8_t pin_states, uint8_t pin_mask) {
-    static uint8_t prev_pressed_buttons = 0;
-
-    // Pin states are inversed - pin is low on button press
-    const auto pressed_buttons = (~pin_states) & pin_mask;
-    const auto triggered_buttons = pressed_buttons & ~prev_pressed_buttons;
-    prev_pressed_buttons = pressed_buttons;
-
-    return triggered_buttons;
-}
-
 void io_expander_read_loop() {
-    if (!buddy::hw::io_expander2.is_initialized()) {
-        return;
-    }
-    if (uint8_t pin_mask = config_store().io_expander_config_register.get()) {
-        static constexpr int32_t io_expander_read_loop_delay_ms = 500;
-        static uint32_t last_tick_ms = ticks_ms();
-        uint32_t tick_ms = ticks_ms();
-        if (ticks_diff(tick_ms, last_tick_ms) >= io_expander_read_loop_delay_ms) {
-            if (const auto value = buddy::hw::io_expander2.read(pin_mask)) {
-
-                // Debouncing mechanism - after pressing a button, there have to be at least one released state before button can be pressed again
-                uint8_t pressed_buttons_mask = io_expander_button_trigger_check(*value, pin_mask);
-
-                for (uint8_t pin_number = 0; pin_number < buddy::hw::TCA6408A::pin_count; pin_number++) {
-                    // Create a mask and extract the pin from the pressed_buttons_mask
-                    const uint8_t single_pin_mask = 0x1 << pin_number;
-
-                    if (pin_mask & single_pin_mask & pressed_buttons_mask) {
-                        if (!inject(GCodeMacroButton(pin_number))) {
-                            SERIAL_ECHOLIST("Injecting Macro Button failed, pin: ", pin_number);
-                        }
-                    }
-                }
-            }
-            last_tick_ms = tick_ms;
-        }
-    }
+    // IO expander removed; no periodic polling required.
 }
-#endif // HAS_I2C_EXPANDER()
 
 static void cycle() {
     // Some things are somewhat time-sensitive and should be updated even in nested loops
