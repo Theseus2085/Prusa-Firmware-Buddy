@@ -51,8 +51,5 @@ void filament_width_sensor_update() {
 
         // Update Marlin's filament measurement
         filwidth.measured_mm = width;
-
-        // Calculate ratio for volumetric extrusion
-        filwidth.calculate_volumetric_multiplier();
     }
 }
