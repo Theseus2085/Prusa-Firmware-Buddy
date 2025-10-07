@@ -42,7 +42,6 @@
 #include "tasks.hpp"
 #include "Marlin/src/module/planner.h"
 #include <option/filament_sensor.h>
-#include "filament_width_sensor.h" //include new filament sensor feature simon
 
 #include <tusb.h>
 

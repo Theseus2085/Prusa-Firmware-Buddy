@@ -1354,9 +1354,7 @@ static_assert(Y_MAX_LENGTH >= Y_BED_SIZE, "Movement bounds (Y_MIN_POS, Y_MAX_POS
  * Filament Width Sensor
  */
 #if ENABLED(FILAMENT_WIDTH_SENSOR)
-  #if !HAS_FILAMENT_WIDTH_SENSOR
-    #error "FILAMENT_WIDTH_SENSOR requires a FILWIDTH_PIN to be defined."
-  #elif ENABLED(NO_VOLUMETRICS)
+  #if ENABLED(NO_VOLUMETRICS)
     #error "FILAMENT_WIDTH_SENSOR requires NO_VOLUMETRICS to be disabled."
   #endif
 #endif

@@ -160,6 +160,3 @@
   #define PS_ON_PIN              MARLIN_PIN(HEATER_ENABLE)
 #endif
 
-#if ENABLED(FILAMENT_WIDTH_SENSOR)
-  #define FILWIDTH_PIN MARLIN_PIN(FilamentWidthSensor)
-#endif

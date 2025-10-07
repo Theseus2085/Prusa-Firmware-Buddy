@@ -29,6 +29,7 @@ void FilamentWidthSensor::set_delay_cm(const uint8_t cm) {
  *
  */
 
+#include "../inc/MarlinConfig.h"
 
 
 #if ENABLED(FILAMENT_WIDTH_SENSOR)
