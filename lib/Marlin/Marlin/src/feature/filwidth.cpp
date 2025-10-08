@@ -27,6 +27,7 @@
 #include "filwidth.h"
 
 #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
+  #include <atomic>
   #include "i2c.hpp"
 
   namespace {
@@ -78,6 +79,10 @@
 
   } // namespace
 
+  namespace {
+    std::atomic<bool> filament_update_pending { false };
+  }
+
 #endif
 
 FilamentWidthSensor filwidth;
@@ -104,6 +109,20 @@ void FilamentWidthSensor::init() {
 }
 
 #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
+
+void FilamentWidthSensor::schedule_update() {
+  filament_update_pending.store(true, std::memory_order_relaxed);
+}
+
+void FilamentWidthSensor::service_update() {
+  if (!filament_update_pending.exchange(false, std::memory_order_acq_rel))
+    return;
+
+  if (!enabled)
+    return;
+
+  update_from_sensor();
+}
 
 bool FilamentWidthSensor::update_from_sensor() {
   uint8_t buffer[sensor_digits] = { 0 };

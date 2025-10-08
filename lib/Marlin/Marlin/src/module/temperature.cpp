@@ -2226,8 +2226,12 @@ void Temperature::updateTemperaturesFromRawValues() {
   #if ENABLED(TEMP_SENSOR_1_AS_REDUNDANT)
     redundant_temperature = analog_to_celsius_hotend(redundant_temperature_raw, 1);
   #endif
-  #if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
-    filwidth.update_measured_mm();
+  #if ENABLED(FILAMENT_WIDTH_SENSOR)
+    #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
+      filwidth.service_update();
+    #else
+      filwidth.update_measured_mm();
+    #endif
   #endif
   #if HAS_TEMP_BOARD
     temp_board.celsius = analog_to_celsius_board(temp_board.raw);
@@ -3649,7 +3653,7 @@ void Temperature::isr() {
       #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
         case Prepare_FILWIDTH: break;
         case Measure_FILWIDTH:
-          filwidth.update_from_sensor();
+          filwidth.schedule_update();
         break;
       #else
         case Prepare_FILWIDTH: HAL_START_ADC(FILWIDTH_PIN); break;

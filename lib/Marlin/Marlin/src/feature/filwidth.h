@@ -24,6 +24,7 @@
 #include "../inc/MarlinConfig.h"
 #include "../module/planner.h"
 
+
 class FilamentWidthSensor {
 public:
   static constexpr int MMD_CM = MAX_MEASUREMENT_DELAY + 1, MMD_MM = MMD_CM * 10;
@@ -63,6 +64,12 @@ public:
   }
 
 #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
+  /// Request a filament-width sensor update from interrupt context.
+  static void schedule_update();
+
+  /// Service any pending sensor update in task context.
+  static void service_update();
+
   /// Poll the external filament-width sensor over I2C. Returns true on success.
   static bool update_from_sensor();
 #else
