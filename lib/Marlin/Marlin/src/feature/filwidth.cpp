@@ -111,30 +111,67 @@ void FilamentWidthSensor::init() {
 #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
 
 void FilamentWidthSensor::schedule_update() {
+  SERIAL_ECHO_START();
+  SERIAL_ECHOLNPGM(" filwidth schedule_update");
   filament_update_pending.store(true, std::memory_order_relaxed);
 }
 
 void FilamentWidthSensor::service_update() {
-  if (!filament_update_pending.exchange(false, std::memory_order_acq_rel))
+  SERIAL_ECHO_START();
+  SERIAL_ECHOLNPGM(" filwidth service_update");
+  if (!filament_update_pending.exchange(false, std::memory_order_acq_rel)) {
+    SERIAL_ECHO_START();
+    SERIAL_ECHOLNPGM(" filwidth service_update skip-no-pending");
     return;
+  }
 
-  if (!enabled)
+  if (!enabled) {
+    SERIAL_ECHO_START();
+    SERIAL_ECHOLNPGM(" filwidth service_update skip-disabled");
     return;
+  }
 
   update_from_sensor();
 }
 
 bool FilamentWidthSensor::update_from_sensor() {
+  SERIAL_ECHO_START();
+  SERIAL_ECHOLNPGM(" filwidth update_from_sensor");
   uint8_t buffer[sensor_digits] = { 0 };
 
   const auto result = i2c::Receive(I2C_HANDLE_FOR(io_expander2), (sensor_address << 1) | 0x1, buffer, sensor_digits, sensor_timeout_ms);
-  if (result != i2c::Result::ok)
+  if (result != i2c::Result::ok) {
+    SERIAL_ECHO_START();
+    SERIAL_ECHOLNPAIR(" filwidth i2c failure=", int(result));
     return false;
+  }
+
+  SERIAL_ECHO_START();
+  SERIAL_ECHOLNPGM(" filwidth i2c ok");
+
+  SERIAL_ECHO_START();
+  SERIAL_ECHOPGM(" filwidth raw:");
+  for (uint8_t i = 0; i < sensor_digits; ++i) {
+    SERIAL_ECHOPGM(" ");
+    SERIAL_ECHO(int(buffer[i]));
+  }
+  SERIAL_ECHOPGM(" ascii:'");
+  for (uint8_t i = 0; i < sensor_digits; ++i)
+    SERIAL_CHAR((buffer[i] >= 32 && buffer[i] <= 126) ? buffer[i] : '.');
+  SERIAL_CHAR('\'');
+  SERIAL_EOL();
 
   float measured_value = measured_mm;
-  if (!decode_sensor_digits(buffer, sensor_digits, measured_value))
+  if (!decode_sensor_digits(buffer, sensor_digits, measured_value)) {
+    SERIAL_ECHO_START();
+    SERIAL_ECHOLNPGM(" filwidth decode failed");
     return false;
+  }
 
+  SERIAL_ECHO_START();
+  SERIAL_ECHOLNPGM(" filwidth decode ok");
+  SERIAL_ECHO_START();
+  SERIAL_ECHOLNPAIR(" filwidth decoded=", measured_value);
   measured_mm = measured_value;
   return true;
 }
