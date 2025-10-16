@@ -144,7 +144,7 @@ bool FilamentWidthSensor::update_from_sensor() {
     SERIAL_ECHO_START();
     switch (ready) {
       case i2c::Result::error:
-        SERIAL_ECHOLNPGM(" filwidth device_not_ready=error");
+        SERIAL_ECHOLNPGM(" filwidth device_not_ready=errorinecho", int(ready));
         break;
       case i2c::Result::busy_after_retries:
         SERIAL_ECHOLNPGM(" filwidth device_not_ready=busy");
@@ -153,7 +153,7 @@ bool FilamentWidthSensor::update_from_sensor() {
         SERIAL_ECHOLNPGM(" filwidth device_not_ready=timeout");
         break;
       default:
-        SERIAL_ECHOLNPAIR(" filwidth device_not_ready=", int(ready));
+        SERIAL_ECHOLNPAIR(" filwidth device_not_ready=realerror", int(ready));
         break;
     }
     return false;
@@ -164,7 +164,7 @@ bool FilamentWidthSensor::update_from_sensor() {
     SERIAL_ECHO_START();
     switch (result) {
       case i2c::Result::error:
-        SERIAL_ECHOLNPGM(" filwidth i2c failure=error");
+        SERIAL_ECHOLNPGM(" filwidth i2c failure=errorrrrrr");
         break;
       case i2c::Result::busy_after_retries:
         SERIAL_ECHOLNPGM(" filwidth i2c failure=busy");
