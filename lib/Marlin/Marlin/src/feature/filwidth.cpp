@@ -87,7 +87,7 @@
 
 FilamentWidthSensor filwidth;
 
-bool FilamentWidthSensor::enabled; // = false;                          // (M405-M406) Filament Width Sensor ON/OFF.
+bool FilamentWidthSensor::enabled = true; // (M405-M406) Filament Width Sensor ON/OFF.
 float FilamentWidthSensor::nominal_mm = DEFAULT_NOMINAL_FILAMENT_DIA,   // (M104) Nominal filament width
       FilamentWidthSensor::measured_mm = DEFAULT_MEASURED_FILAMENT_DIA, // Measured filament diameter
       FilamentWidthSensor::e_count = 0,
@@ -139,10 +139,43 @@ bool FilamentWidthSensor::update_from_sensor() {
   SERIAL_ECHOLNPGM(" filwidth update_from_sensor");
   uint8_t buffer[sensor_digits] = { 0 };
 
+  const auto ready = i2c::IsDeviceReady(I2C_HANDLE_FOR(io_expander2), sensor_address << 1, 1, sensor_timeout_ms);
+  if (ready != i2c::Result::ok) {
+    SERIAL_ECHO_START();
+    switch (ready) {
+      case i2c::Result::error:
+        SERIAL_ECHOLNPGM(" filwidth device_not_ready=error");
+        break;
+      case i2c::Result::busy_after_retries:
+        SERIAL_ECHOLNPGM(" filwidth device_not_ready=busy");
+        break;
+      case i2c::Result::timeout:
+        SERIAL_ECHOLNPGM(" filwidth device_not_ready=timeout");
+        break;
+      default:
+        SERIAL_ECHOLNPAIR(" filwidth device_not_ready=", int(ready));
+        break;
+    }
+    return false;
+  }
+
   const auto result = i2c::Receive(I2C_HANDLE_FOR(io_expander2), (sensor_address << 1) | 0x1, buffer, sensor_digits, sensor_timeout_ms);
   if (result != i2c::Result::ok) {
     SERIAL_ECHO_START();
-    SERIAL_ECHOLNPAIR(" filwidth i2c failure=", int(result));
+    switch (result) {
+      case i2c::Result::error:
+        SERIAL_ECHOLNPGM(" filwidth i2c failure=error");
+        break;
+      case i2c::Result::busy_after_retries:
+        SERIAL_ECHOLNPGM(" filwidth i2c failure=busy");
+        break;
+      case i2c::Result::timeout:
+        SERIAL_ECHOLNPGM(" filwidth i2c failure=timeout");
+        break;
+      default:
+        SERIAL_ECHOLNPAIR(" filwidth i2c failure=", int(result));
+        break;
+    }
     return false;
   }
 
