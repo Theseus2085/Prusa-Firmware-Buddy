@@ -70,6 +70,9 @@ public:
   /// Service any pending sensor update in task context.
   static void service_update();
 
+  /// List all detected devices on the configured I2C bus.
+  static void log_i2c_devices();
+
   /// Poll the external filament-width sensor over I2C. Returns true on success.
   static bool update_from_sensor();
 #else

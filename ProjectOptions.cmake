@@ -380,7 +380,7 @@ set_feature_for_printers(HAS_NFC "MK3.5" "MK4" "COREONE")
 
 set_feature_for_printers(HAS_NOZZLE_CLEANER "iX")
 set_feature_for_printers(HAS_BELT_TUNING "iX")
-set_feature_for_printers_master_board(HAS_I2C_EXPANDER "MK3.5" "COREONE")
+set_feature_for_printers_master_board(HAS_I2C_EXPANDER "MK3.5" "MK4" "COREONE")
 set_feature_for_printers(HAS_WASTEBIN "iX")
 set_feature_for_printers(HAS_GEARS_CALIBRATION "MK4" "COREONE")
 

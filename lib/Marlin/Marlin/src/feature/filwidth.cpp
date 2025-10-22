@@ -32,7 +32,7 @@
 
   namespace {
 
-    constexpr uint8_t sensor_address = FILWIDTH_SENSOR_I2C_ADDRESS;
+    constexpr uint8_t sensor_address = 0x42; // FILWIDTH_SENSOR_I2C_ADDRESS
     constexpr uint8_t sensor_digits = FILWIDTH_SENSOR_DIGITS;
     constexpr uint32_t sensor_timeout_ms = FILWIDTH_SENSOR_TIMEOUT_MS;
 
@@ -86,7 +86,6 @@
 #endif
 
 FilamentWidthSensor filwidth;
-
 bool FilamentWidthSensor::enabled = true; // (M405-M406) Filament Width Sensor ON/OFF.
 float FilamentWidthSensor::nominal_mm = DEFAULT_NOMINAL_FILAMENT_DIA,   // (M104) Nominal filament width
       FilamentWidthSensor::measured_mm = DEFAULT_MEASURED_FILAMENT_DIA, // Measured filament diameter
@@ -134,17 +133,62 @@ void FilamentWidthSensor::service_update() {
   update_from_sensor();
 }
 
+void FilamentWidthSensor::log_i2c_devices() {
+  SERIAL_ECHO_START();
+  SERIAL_ECHOLNPGM(" filwidth i2c scan begin");
+
+  constexpr char hex_digits[] = "0123456789ABCDEF";
+  struct BusInfo {
+    I2C_HandleTypeDef &handle;
+    const char *name;
+  };
+
+  BusInfo buses[] = {
+    { hi2c1, "hi2c1" },
+    { hi2c2, "hi2c2" },
+    { hi2c3, "hi2c3" }
+  };
+
+  for (const auto &bus : buses) {
+    SERIAL_ECHO_START();
+    SERIAL_ECHOLNPAIR(" filwidth i2c bus=", bus.name);
+
+    uint8_t found = 0;
+
+    for (uint8_t address = 0x01; address < 0x80; ++address) {
+      const auto status = i2c::IsDeviceReady(bus.handle, address << 1, 1, sensor_timeout_ms);
+      if (status == i2c::Result::ok) {
+        ++found;
+        SERIAL_ECHO_START();
+        SERIAL_ECHOPGM(" filwidth i2c addr 0x");
+        SERIAL_CHAR(hex_digits[(address >> 4) & 0x0F]);
+        SERIAL_CHAR(hex_digits[address & 0x0F]);
+        SERIAL_ECHOLNPGM("");
+      }
+    }
+
+    SERIAL_ECHO_START();
+    if (found == 0) {
+      SERIAL_ECHOLNPGM(" filwidth i2c scan done - no devices");
+    }
+    else {
+      SERIAL_ECHOLNPAIR(" filwidth i2c scan device_count=", int(found));
+    }
+  }
+}
+
 bool FilamentWidthSensor::update_from_sensor() {
+  log_i2c_devices();
   SERIAL_ECHO_START();
   SERIAL_ECHOLNPGM(" filwidth update_from_sensor");
   uint8_t buffer[sensor_digits] = { 0 };
 
-  const auto ready = i2c::IsDeviceReady(I2C_HANDLE_FOR(io_expander2), sensor_address << 1, 1, sensor_timeout_ms);
+  const auto ready = i2c::IsDeviceReady(hi2c2, sensor_address << 1, 1, sensor_timeout_ms);
   if (ready != i2c::Result::ok) {
     SERIAL_ECHO_START();
     switch (ready) {
       case i2c::Result::error:
-        SERIAL_ECHOLNPGM(" filwidth device_not_ready=errorinecho", int(ready));
+        //SERIAL_ECHOLNPAIR(" filwidth device_not_ready=errorinecho", int(ready));
         break;
       case i2c::Result::busy_after_retries:
         SERIAL_ECHOLNPGM(" filwidth device_not_ready=busy");
