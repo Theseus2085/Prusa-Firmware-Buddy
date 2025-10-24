@@ -32,7 +32,7 @@
 
   namespace {
 
-    constexpr uint8_t sensor_address = 0x42; // FILWIDTH_SENSOR_I2C_ADDRESS
+  constexpr uint8_t sensor_address = 0x62; // SCD41 I2C 7-bit address
     constexpr uint8_t sensor_digits = FILWIDTH_SENSOR_DIGITS;
     constexpr uint32_t sensor_timeout_ms = FILWIDTH_SENSOR_TIMEOUT_MS;
 
@@ -133,48 +133,64 @@ void FilamentWidthSensor::service_update() {
   update_from_sensor();
 }
 
-void FilamentWidthSensor::log_i2c_devices() {
+void FilamentWidthSensor::get_and_publish_scd41() {
   SERIAL_ECHO_START();
-  SERIAL_ECHOLNPGM(" filwidth i2c scan begin");
+  SERIAL_ECHOLNPGM(" filwidth get_and_publish_scd41");
 
-  constexpr char hex_digits[] = "0123456789ABCDEF";
-  struct BusInfo {
-    I2C_HandleTypeDef &handle;
-    const char *name;
-  };
+  I2C_HandleTypeDef &hi2c = I2C_HANDLE_FOR(io_expander2);
 
-  BusInfo buses[] = {
-    { hi2c1, "hi2c1" },
-    { hi2c2, "hi2c2" },
-    { hi2c3, "hi2c3" }
-  };
+  const auto ready = i2c::IsDeviceReady(hi2c, uint16_t(sensor_address << 1), 1, sensor_timeout_ms);
+  if (ready != i2c::Result::ok) {
+    SERIAL_ECHO_START(); SERIAL_ECHOLNPAIR(" SCD41: not ready=", int(ready));
+    return;
+  }
 
-  for (const auto &bus : buses) {
-    SERIAL_ECHO_START();
-    SERIAL_ECHOLNPAIR(" filwidth i2c bus=", bus.name);
-
-    uint8_t found = 0;
-
-    for (uint8_t address = 0x01; address < 0x80; ++address) {
-      const auto status = i2c::IsDeviceReady(bus.handle, address << 1, 1, sensor_timeout_ms);
-      if (status == i2c::Result::ok) {
-        ++found;
-        SERIAL_ECHO_START();
-        SERIAL_ECHOPGM(" filwidth i2c addr 0x");
-        SERIAL_CHAR(hex_digits[(address >> 4) & 0x0F]);
-        SERIAL_CHAR(hex_digits[address & 0x0F]);
-        SERIAL_ECHOLNPGM("");
+  // helper: Sensirion CRC8 (polynomial 0x31 init 0xFF)
+  auto sensirion_crc8 = [](const uint8_t *data, size_t len) {
+    uint8_t crc = 0xFF;
+    for (size_t i = 0; i < len; ++i) {
+      crc ^= data[i];
+      for (uint8_t b = 0; b < 8; ++b) {
+        crc = (crc & 0x80) ? uint8_t((crc << 1) ^ 0x31) : uint8_t(crc << 1);
       }
     }
+    return crc;
+  };
 
-    SERIAL_ECHO_START();
-    if (found == 0) {
-      SERIAL_ECHOLNPGM(" filwidth i2c scan done - no devices");
-    }
-    else {
-      SERIAL_ECHOLNPAIR(" filwidth i2c scan device_count=", int(found));
+  // Request a measurement read (SCD4x read command 0xEC05)
+  uint8_t cmd[2] = { 0xEC, 0x05 };
+  if (i2c::Transmit(hi2c, uint16_t(sensor_address << 1), cmd, 2, sensor_timeout_ms) != i2c::Result::ok) {
+    SERIAL_ECHO_START(); SERIAL_ECHOLNPGM(" SCD41: failed to send read command");
+    return;
+  }
+
+  // Read 9 bytes: CO2(2)+CRC, T(2)+CRC, RH(2)+CRC
+  uint8_t buf[9] = {0};
+  if (i2c::Receive(hi2c, uint16_t((sensor_address << 1) | 0x1), buf, sizeof(buf), sensor_timeout_ms) != i2c::Result::ok) {
+    SERIAL_ECHO_START(); SERIAL_ECHOLNPGM(" SCD41: read failed (i2c receive)");
+    return;
+  }
+
+  // Validate CRCs
+  for (int i = 0; i < 3; ++i) {
+    const uint8_t *w = &buf[i * 3];
+    if (sensirion_crc8(w, 2) != w[2]) {
+      SERIAL_ECHO_START(); SERIAL_ECHOLNPGM(" SCD41: CRC mismatch");
+      return;
     }
   }
+
+  uint16_t co2 = (uint16_t(buf[0]) << 8) | uint16_t(buf[1]);
+  uint16_t raw_t = (uint16_t(buf[3]) << 8) | uint16_t(buf[4]);
+  uint16_t raw_rh = (uint16_t(buf[6]) << 8) | uint16_t(buf[7]);
+
+  float temp_c = -45.0f + 175.0f * (float(raw_t) / 65536.0f);
+  float rh = 100.0f * (float(raw_rh) / 65536.0f);
+
+  SERIAL_ECHO_START(); SERIAL_ECHOLNPGM(" SCD41 measurement:");
+  SERIAL_ECHO_START(); SERIAL_ECHOLNPAIR("  co2_ppm=", int(co2));
+  SERIAL_ECHO_START(); SERIAL_ECHOLNPAIR("  temp_c=", temp_c);
+  SERIAL_ECHO_START(); SERIAL_ECHOLNPAIR("  rh_pct=", rh);
 }
 
 bool FilamentWidthSensor::update_from_sensor() {
