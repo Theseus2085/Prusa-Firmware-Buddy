@@ -194,7 +194,6 @@ void FilamentWidthSensor::get_and_publish_scd41() {
 }
 
 bool FilamentWidthSensor::update_from_sensor() {
-  log_i2c_devices();
   SERIAL_ECHO_START();
   SERIAL_ECHOLNPGM(" filwidth update_from_sensor");
   uint8_t buffer[sensor_digits] = { 0 };
@@ -204,7 +203,7 @@ bool FilamentWidthSensor::update_from_sensor() {
     SERIAL_ECHO_START();
     switch (ready) {
       case i2c::Result::error:
-        //SERIAL_ECHOLNPAIR(" filwidth device_not_ready=errorinecho", int(ready));
+        SERIAL_ECHOLNPAIR(" filwidth device_not_ready=errorinecho", int(ready));
         break;
       case i2c::Result::busy_after_retries:
         SERIAL_ECHOLNPGM(" filwidth device_not_ready=busy");
@@ -219,7 +218,7 @@ bool FilamentWidthSensor::update_from_sensor() {
     return false;
   }
 
-  const auto result = i2c::Receive(I2C_HANDLE_FOR(io_expander2), (sensor_address << 1) | 0x1, buffer, sensor_digits, sensor_timeout_ms);
+  const auto result = i2c::Receive(hi2c2, (sensor_address << 1) | 0x1, buffer, sensor_digits, sensor_timeout_ms);
   if (result != i2c::Result::ok) {
     SERIAL_ECHO_START();
     switch (result) {

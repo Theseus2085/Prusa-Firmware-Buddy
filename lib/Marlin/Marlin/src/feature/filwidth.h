@@ -73,9 +73,6 @@ public:
   /// Read SCD41 from the filwidth I2C port and publish readings to serial.
   static void get_and_publish_scd41();
 
-  /// List all detected devices on the configured I2C bus.
-  static void log_i2c_devices();
-
   /// Poll the external filament-width sensor over I2C. Returns true on success.
   static bool update_from_sensor();
 #else
