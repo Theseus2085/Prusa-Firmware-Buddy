@@ -32,44 +32,71 @@
 
   namespace {
 
+    // I2C address for the filament width sensor (currently set to 0x42 for testing with ESP32)
     constexpr uint8_t sensor_address = 0x42; // FILWIDTH_SENSOR_I2C_ADDRESS
+    
+    // Number of digits we expect from the sensor reading
     constexpr uint8_t sensor_digits = FILWIDTH_SENSOR_DIGITS;
+    
+    // Timeout in milliseconds for I2C operations - don't want to block forever if sensor doesn't respond
     constexpr uint32_t sensor_timeout_ms = FILWIDTH_SENSOR_TIMEOUT_MS;
 
+    /**
+     * Decode the sensor's ASCII digit response into a float value representing filament diameter in mm.
+     * The sensor sends digits like "175" which we interpret as 1.75mm.
+     * 
+     * @param buffer Raw bytes received from the sensor
+     * @param length How many bytes we got
+     * @param out_mm Where to store the decoded diameter value
+     * @return true if we successfully decoded a valid measurement, false otherwise
+     */
     bool decode_sensor_digits(const uint8_t *buffer, const uint8_t length, float &out_mm) {
       if (!buffer) return false;
 
       uint8_t digits_collected = 0;
       uint8_t digits[sensor_digits] = { 0 };
 
+      // Parse through the buffer, extracting digits and ignoring whitespace/punctuation
       for (uint8_t i = 0; i < length && digits_collected < sensor_digits; ++i) {
         const uint8_t value = buffer[i];
 
+        // Skip newlines, carriage returns, and spaces - sensor might send formatting chars
         if (value == '\n' || value == '\r' || value == ' ') continue;
+        
+        // Skip decimal points - we'll handle the decimal placement ourselves
         if (value == '.') continue;
 
         uint8_t digit;
+        // Handle raw binary digits (0-9)
         if (value <= 9) {
           digit = value;
         }
+        // Handle ASCII digits ('0'-'9')
         else if (value >= '0' && value <= '9') {
           digit = value - '0';
         }
         else {
+          // Got something that's not a digit - bail out
           return false;
         }
 
         digits[digits_collected++] = digit;
       }
 
+      // Make sure we got exactly the right number of digits
       if (digits_collected != sensor_digits)
         return false;
 
+      // Convert digits to a float. First digit is the ones place (e.g., "1" in 1.75)
       float result = digits[0];
       float scale = 0.1f;
+      
+      // Remaining digits are decimal places (e.g., "75" in 1.75)
       for (uint8_t i = 1; i < sensor_digits; ++i, scale *= 0.1f)
         result += digits[i] * scale;
 
+      // Sanity check - filament diameter should be between 0.5mm and 3.5mm
+      // Anything outside this range is probably garbage data
       if (!WITHIN(result, 0.5f, 3.5f))
         return false;
 
@@ -80,6 +107,8 @@
   } // namespace
 
   namespace {
+    // Thread-safe flag to track whether a sensor update has been requested
+    // We use atomic because this might be set from an interrupt and read from main loop
     std::atomic<bool> filament_update_pending { false };
   }
 
@@ -109,35 +138,58 @@ void FilamentWidthSensor::init() {
 
 #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
 
+/**
+ * Request a sensor update from interrupt context.
+ * This just sets a flag - the actual I2C communication happens later in service_update()
+ * because you don't want to do slow I2C stuff in an interrupt.
+ */
 void FilamentWidthSensor::schedule_update() {
   SERIAL_ECHO_START();
   SERIAL_ECHOLNPGM(" filwidth schedule_update");
+  // Set the flag atomically so the main loop knows to read the sensor
   filament_update_pending.store(true, std::memory_order_relaxed);
 }
 
+/**
+ * Service a pending sensor update in the main task context.
+ * This is where the actual I2C communication happens - called from the main loop,
+ * not from an interrupt, so it's safe to do blocking I2C operations here.
+ */
 void FilamentWidthSensor::service_update() {
   SERIAL_ECHO_START();
   SERIAL_ECHOLNPGM(" filwidth service_update");
+  
+  // Check if an update was requested, and clear the flag atomically
   if (!filament_update_pending.exchange(false, std::memory_order_acq_rel)) {
     SERIAL_ECHO_START();
     SERIAL_ECHOLNPGM(" filwidth service_update skip-no-pending");
-    return;
+    return; // No update pending, nothing to do
   }
 
+  // Don't bother reading the sensor if the feature is disabled
   if (!enabled) {
     SERIAL_ECHO_START();
     SERIAL_ECHOLNPGM(" filwidth service_update skip-disabled");
     return;
   }
 
+  // Do the actual sensor read
   update_from_sensor();
 }
 
+/**
+ * Scan all three I2C buses and log any devices that respond.
+ * Useful for debugging - helps you figure out which bus your sensor is on
+ * and what address it's responding to.
+ */
 void FilamentWidthSensor::log_i2c_devices() {
   SERIAL_ECHO_START();
   SERIAL_ECHOLNPGM(" filwidth i2c scan begin");
 
+  // Lookup table for hex digit conversion (for pretty-printing addresses)
   constexpr char hex_digits[] = "0123456789ABCDEF";
+  
+  // Define which I2C buses to scan
   struct BusInfo {
     I2C_HandleTypeDef &handle;
     const char *name;
@@ -149,24 +201,30 @@ void FilamentWidthSensor::log_i2c_devices() {
     { hi2c3, "hi2c3" }
   };
 
+  // Scan each bus
   for (const auto &bus : buses) {
     SERIAL_ECHO_START();
     SERIAL_ECHOLNPAIR(" filwidth i2c bus=", bus.name);
 
     uint8_t found = 0;
 
+    // Try every valid 7-bit I2C address (0x01 to 0x7F)
+    // We skip 0x00 because that's reserved
     for (uint8_t address = 0x01; address < 0x80; ++address) {
+      // Ping the device - if it responds, it's there
       const auto status = i2c::IsDeviceReady(bus.handle, address << 1, 1, sensor_timeout_ms);
       if (status == i2c::Result::ok) {
         ++found;
+        // Print the address in hex (e.g., "0x42")
         SERIAL_ECHO_START();
         SERIAL_ECHOPGM(" filwidth i2c addr 0x");
-        SERIAL_CHAR(hex_digits[(address >> 4) & 0x0F]);
-        SERIAL_CHAR(hex_digits[address & 0x0F]);
+        SERIAL_CHAR(hex_digits[(address >> 4) & 0x0F]); // High nibble
+        SERIAL_CHAR(hex_digits[address & 0x0F]);        // Low nibble
         SERIAL_ECHOLNPGM("");
       }
     }
 
+    // Report how many devices where found on this bus
     SERIAL_ECHO_START();
     if (found == 0) {
       SERIAL_ECHOLNPGM(" filwidth i2c scan done - no devices");
@@ -177,18 +235,35 @@ void FilamentWidthSensor::log_i2c_devices() {
   }
 }
 
+/**
+ * Read the filament width sensor over I2C and update our measurement.
+ * This is the main workhorse function that:
+ * 1. Runs a full I2C bus scan (for debugging)
+ * 2. Checks if the sensor is ready to talk
+ * 3. Reads the raw data from the sensor
+ * 4. Decodes it into a filament diameter measurement
+ * 
+ * @return true if we successfully read and decoded a measurement, false on any error
+ */
 bool FilamentWidthSensor::update_from_sensor() {
+  // First, do a full bus scan to see what's out there (helpful for debugging)
   log_i2c_devices();
+  
   SERIAL_ECHO_START();
   SERIAL_ECHOLNPGM(" filwidth update_from_sensor");
+  
+  // Buffer to hold the raw bytes from the sensor
   uint8_t buffer[sensor_digits] = { 0 };
 
+  // Check if the sensor is ready to communicate
+  // We use hi2c2 (the IO expander bus) and left-shift address because I2C uses 8-bit addresses
   const auto ready = i2c::IsDeviceReady(hi2c2, sensor_address << 1, 1, sensor_timeout_ms);
   if (ready != i2c::Result::ok) {
     SERIAL_ECHO_START();
+    // Log different error types for debugging
     switch (ready) {
       case i2c::Result::error:
-        //SERIAL_ECHOLNPAIR(" filwidth device_not_ready=errorinecho", int(ready));
+        SERIAL_ECHOLNPAIR(" filwidth device_not_ready=errorinecho", int(ready));
         break;
       case i2c::Result::busy_after_retries:
         SERIAL_ECHOLNPGM(" filwidth device_not_ready=busy");
@@ -203,9 +278,12 @@ bool FilamentWidthSensor::update_from_sensor() {
     return false;
   }
 
+  // Sensor is ready, so read the data
+  // We OR with 0x1 to set the read bit in the I2C address
   const auto result = i2c::Receive(I2C_HANDLE_FOR(io_expander2), (sensor_address << 1) | 0x1, buffer, sensor_digits, sensor_timeout_ms);
   if (result != i2c::Result::ok) {
     SERIAL_ECHO_START();
+    // Different errors mean different things - log them all
     switch (result) {
       case i2c::Result::error:
         SERIAL_ECHOLNPGM(" filwidth i2c failure=errorrrrrr");
@@ -223,32 +301,40 @@ bool FilamentWidthSensor::update_from_sensor() {
     return false;
   }
 
+  // We got data! Log it for debugging
   SERIAL_ECHO_START();
   SERIAL_ECHOLNPGM(" filwidth i2c ok");
 
+  // Print the raw bytes as decimal numbers
   SERIAL_ECHO_START();
   SERIAL_ECHOPGM(" filwidth raw:");
   for (uint8_t i = 0; i < sensor_digits; ++i) {
     SERIAL_ECHOPGM(" ");
     SERIAL_ECHO(int(buffer[i]));
   }
+  
+  // Also print as ASCII characters (if printable) - helps see if sensor is sending text
   SERIAL_ECHOPGM(" ascii:'");
   for (uint8_t i = 0; i < sensor_digits; ++i)
-    SERIAL_CHAR((buffer[i] >= 32 && buffer[i] <= 126) ? buffer[i] : '.');
+    SERIAL_CHAR((buffer[i] >= 32 && buffer[i] <= 126) ? buffer[i] : '.'); // Replace unprintable chars with '.'
   SERIAL_CHAR('\'');
   SERIAL_EOL();
 
-  float measured_value = measured_mm;
+  // Try to decode the raw bytes into a measurement
+  float measured_value = measured_mm; // Start with current value as fallback
   if (!decode_sensor_digits(buffer, sensor_digits, measured_value)) {
     SERIAL_ECHO_START();
     SERIAL_ECHOLNPGM(" filwidth decode failed");
-    return false;
+    return false; // Couldn't make sense of what the sensor sent
   }
 
+  // Success! We decoded a valid measurement
   SERIAL_ECHO_START();
   SERIAL_ECHOLNPGM(" filwidth decode ok");
   SERIAL_ECHO_START();
   SERIAL_ECHOLNPAIR(" filwidth decoded=", measured_value);
+  
+  // Update our stored measurement
   measured_mm = measured_value;
   return true;
 }
