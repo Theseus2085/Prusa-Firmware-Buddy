@@ -2114,7 +2114,7 @@
 
 #if ENABLED(FILAMENT_WIDTH_SENSOR)
     #define FILAMENT_SENSOR_EXTRUDER_NUM 0 // Index of the extruder that has the filament sensor. :[0,1,2,3,4]
-    #define MEASUREMENT_DELAY_CM 1 // (cm) The distance from the filament sensor to the melting chamber
+    #define MEASUREMENT_DELAY_CM 5 // (cm) The distance from the filament sensor to the melting chamber
 
     #define FILWIDTH_SENSOR_USE_I2C
     #define FILWIDTH_SENSOR_I2C_ADDRESS 0x42 // 7-bit address of the external filament width sensor
@@ -2122,7 +2122,7 @@
     #define FILWIDTH_SENSOR_DIGITS 5 // Number of digits provided by the filament width sensor (first digit is the millimeter)
 
     #define FILWIDTH_ERROR_MARGIN 5.0 // (mm) If a measurement differs too much from nominal width ignore it
-    #define MAX_MEASUREMENT_DELAY 2 // (bytes) Buffer size for stored measurements (1 byte per cm). Must be larger than MEASUREMENT_DELAY_CM.
+    #define MAX_MEASUREMENT_DELAY 8 // (bytes) Buffer size for stored measurements (1 byte per cm). Must be larger than MEASUREMENT_DELAY_CM.
 
     #define DEFAULT_MEASURED_FILAMENT_DIA DEFAULT_NOMINAL_FILAMENT_DIA // Set measured to nominal initially
 

@@ -141,7 +141,7 @@ void FilamentWidthSensor::init() {
 /**
  * Request a sensor update from interrupt context.
  * This just sets a flag - the actual I2C communication happens later in service_update()
- * because you don't want to do slow I2C stuff in an interrupt.
+ * don't want to do slow I2C stuff in an interrupt.
  */
 void FilamentWidthSensor::schedule_update() {
   SERIAL_ECHO_START();
@@ -236,14 +236,14 @@ void FilamentWidthSensor::log_i2c_devices() {
 }
 
 /**
- * Read the filament width sensor over I2C and update our measurement.
+ * Read the filament width sensor over I2C and update the measurement.
  * This is the main workhorse function that:
  * 1. Runs a full I2C bus scan (for debugging)
  * 2. Checks if the sensor is ready to talk
  * 3. Reads the raw data from the sensor
  * 4. Decodes it into a filament diameter measurement
  * 
- * @return true if we successfully read and decoded a measurement, false on any error
+ * @return true if successfully read and decoded a measurement, false on any error
  */
 bool FilamentWidthSensor::update_from_sensor() {
   // First, do a full bus scan to see what's out there (helpful for debugging)
@@ -256,7 +256,7 @@ bool FilamentWidthSensor::update_from_sensor() {
   uint8_t buffer[sensor_digits] = { 0 };
 
   // Check if the sensor is ready to communicate
-  // We use hi2c2 (the IO expander bus) and left-shift address because I2C uses 8-bit addresses
+  // use hi2c2 (the IO expander bus) and left-shift address because I2C uses 8-bit addresses
   const auto ready = i2c::IsDeviceReady(hi2c2, sensor_address << 1, 1, sensor_timeout_ms);
   if (ready != i2c::Result::ok) {
     SERIAL_ECHO_START();
@@ -279,7 +279,7 @@ bool FilamentWidthSensor::update_from_sensor() {
   }
 
   // Sensor is ready, so read the data
-  // We OR with 0x1 to set the read bit in the I2C address
+  // OR with 0x1 to set the read bit in the I2C address
   const auto result = i2c::Receive(I2C_HANDLE_FOR(io_expander2), (sensor_address << 1) | 0x1, buffer, sensor_digits, sensor_timeout_ms);
   if (result != i2c::Result::ok) {
     SERIAL_ECHO_START();
