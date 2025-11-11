@@ -18,11 +18,9 @@ import sys
 import tarfile
 import venv
 import zipfile
-import stat
 from argparse import ArgumentParser
 from pathlib import Path
 from urllib.parse import urlparse
-import requests
 
 assert sys.version_info >= (3, 8), 'Python 3.8+ is required.'
 is_windows = platform.system() == 'Windows'
@@ -31,6 +29,62 @@ dependencies_dir = project_root_dir / '.dependencies'
 venv_dir = project_root_dir / '.venv'
 venv_bin_dir = venv_dir / 'bin' if not is_windows else venv_dir / 'Scripts'
 running_in_venv = Path(sys.prefix).resolve() == venv_dir.resolve()
+
+
+def switch_to_venv_if_needed() -> None:
+    """Ensure this script runs inside the project virtual environment."""
+    if running_in_venv or os.environ.get('BUDDY_NO_VIRTUALENV') == '1':
+        return
+
+    if not venv_dir.exists():
+        print('Creating needed virtual environment in .venv')
+        venv.create(venv_dir, with_pip=True, prompt='buddy')
+
+    print("Switching to Buddy's virtual environment.", file=sys.stderr)
+    print(
+        'You can disable this by setting the BUDDY_NO_VIRTUALENV=1 env. variable.',
+        file=sys.stderr)
+    python_executable = venv_bin_dir / ('python.exe'
+                                        if is_windows else 'python')
+    os.execv(str(python_executable), [str(python_executable)] + sys.argv)
+
+
+switch_to_venv_if_needed()
+
+
+def ensure_requests_available():
+    """Import requests, installing it into the active interpreter if needed."""
+    try:
+        import requests  # type: ignore
+        return requests
+    except ModuleNotFoundError:
+        requirement = 'requests'
+        requirements_path = project_root_dir / 'requirements.txt'
+        try:
+            with open(requirements_path, 'r', encoding='utf-8') as req_file:
+                for raw_line in req_file:
+                    line = raw_line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if line.startswith('requests'):
+                        requirement = line
+                        break
+        except OSError:
+            pass
+
+        interpreter = (venv_bin_dir /
+                       ('python.exe' if is_windows else 'python')
+                       ) if running_in_venv else Path(sys.executable)
+        print(f'Installing missing dependency: {requirement}', file=sys.stderr)
+        subprocess.check_call([
+            str(interpreter), '-m', 'pip', 'install',
+            '--disable-pip-version-check', requirement
+        ])
+        import requests  # type: ignore
+        return requests
+
+
+requests = ensure_requests_available()
 
 # All dependencies of this project.
 #
@@ -268,19 +322,6 @@ def get_dependency_version(dependency):
 def get_dependency_directory(dependency) -> Path:
     version = dependencies[dependency]['version']
     return Path(directory_for_dependency(dependency, version))
-
-
-def switch_to_venv_if_nedded():
-    if not running_in_venv and os.environ.get('BUDDY_NO_VIRTUALENV') != '1':
-        if not os.path.exists(".venv"):
-            print('Creating needed virtual environment in .venv')
-            os.system(sys.executable + ' -m venv .venv')
-        print('Switching to Buddy\'s virtual environment.', file=sys.stderr)
-        print(
-            'You can disable this by setting the BUDDY_NO_VIRTUALENV=1 env. variable.',
-            file=sys.stderr)
-        os.execv(str(venv_bin_dir / 'python'),
-                 [str(venv_bin_dir / 'python')] + sys.argv)
 
 
 def prepare_venv_if_needed():
