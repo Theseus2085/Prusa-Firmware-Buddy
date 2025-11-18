@@ -24,105 +24,72 @@
 #include "../inc/MarlinConfig.h"
 #include "../module/planner.h"
 
+#if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
+  #error "FILAMENT_WIDTH_SENSOR now requires FILWIDTH_SENSOR_USE_I2C"
+#endif
+
+#if ENABLED(FILWIDTH_SENSOR_USE_I2C)
+  #ifndef FILWIDTH_SENSOR_QUEUE_CAPACITY
+    #define FILWIDTH_SENSOR_QUEUE_CAPACITY (MAX_MEASUREMENT_DELAY + 1)
+  #endif
+  #ifndef FILWIDTH_SENSOR_VALUE_SCALE
+    #define FILWIDTH_SENSOR_VALUE_SCALE 0.01f
+  #endif
+  #ifndef FILWIDTH_SENSOR1_OFFSET_MM
+    #define FILWIDTH_SENSOR1_OFFSET_MM (MEASUREMENT_DELAY_CM * 10.0f)
+  #endif
+  #ifndef FILWIDTH_SENSOR_SPACING_MM
+    #define FILWIDTH_SENSOR_SPACING_MM 1.0f
+  #endif
+  #ifndef FILWIDTH_SENSOR2_OFFSET_MM
+    #define FILWIDTH_SENSOR2_OFFSET_MM (FILWIDTH_SENSOR1_OFFSET_MM + FILWIDTH_SENSOR_SPACING_MM)
+  #endif
+#endif
 
 class FilamentWidthSensor {
 public:
-  static constexpr int MMD_CM = MAX_MEASUREMENT_DELAY + 1, MMD_MM = MMD_CM * 10;
-  static bool enabled;              // (M405-M406) Filament Width Sensor ON/OFF.
-  static float nominal_mm,          // (M104) Nominal filament width
-               measured_mm,         // Measured filament diameter
-               e_count, delay_dist;
-  static uint8_t meas_delay_cm;     // Distance delay setting
-  static int8_t ratios[MMD_CM],     // Ring buffer to delay measurement. (Extruder factor minus 100)
-                index_r, index_w;   // Indexes into ring buffer
+  static constexpr int MMD_CM = MAX_MEASUREMENT_DELAY + 1;
+  static constexpr int MMD_MM = MMD_CM * 10;
 
-#if DISABLED(FILWIDTH_SENSOR_USE_I2C)
-  static uint32_t accum;            // ADC accumulator
-  static uint16_t raw;              // Measured filament diameter - one extruder only
-#endif
+  static bool enabled;              // (M405-M406) Filament Width Sensor ON/OFF.
+  static float nominal_mm;          // (M104) Nominal filament width
+  static float measured_mm;         // Measured filament diameter (equivalent diameter for ellipse)
+  static float nominal_area;        // Reference ellipse area for nominal filament
+  static float e_count;             // Extruder movement accumulator
+  static float delay_dist;          // Running distance through the delay buffer
+  static uint8_t meas_delay_cm;     // Distance delay setting
+  static float ratios[MMD_CM];      // Ring buffer to delay measurement. (Extruder factor minus 100)
+  static int8_t index_r;            // Index into ring buffer for reading
+  static int8_t index_w;            // Index into ring buffer for writing
+
+  static constexpr uint8_t sensor_count = 2;
+
+  // Two-dimensional circular queues keep each axis aligned to the E position where it reaches the nozzle.
+  static float sensor_queue[sensor_count][FILWIDTH_SENSOR_QUEUE_CAPACITY];
+  static float sensor_targets_mm[sensor_count][FILWIDTH_SENSOR_QUEUE_CAPACITY];
+  static uint8_t sensor_head[sensor_count];
+  static uint8_t sensor_size[sensor_count];
+  static float sensor_offsets_mm[sensor_count];
+  static float filament_position_mm;
+  static float latest_axes_mm[sensor_count];
+
+  static void enqueue_sensor_sample(uint8_t sensor_index, float diameter_mm);
+  static bool try_pop_aligned_sample(float &axis_a_mm, float &axis_b_mm);
+  static void process_ready_samples();
+  static float compute_equivalent_diameter(float axis_a_mm, float axis_b_mm);
 
   FilamentWidthSensor() { init(); }
+
   static void init();
-
   static inline void enable(const bool ena) { enabled = ena; }
+  static inline void set_delay_cm(const uint8_t cm) { meas_delay_cm = _MIN(cm, MAX_MEASUREMENT_DELAY); }
 
-  static inline void set_delay_cm(const uint8_t cm) {
-    meas_delay_cm = _MIN(cm, MAX_MEASUREMENT_DELAY);
-  }
-
-  /**
-   * Convert Filament Width (mm) to an extrusion ratio
-   * and reduce to an 8 bit value.
-   *
-   * A nominal width of 1.75 and measured width of 1.73
-   * gives (100 * 1.75 / 1.73) for a ratio of 101 and
-   * a return value of 1.
-   */
-  static int8_t sample_to_size_ratio() {
-    return ABS(nominal_mm - measured_mm) <= FILWIDTH_ERROR_MARGIN
-           ? int(100.0f * nominal_mm / measured_mm) - 100 : 0;
-  }
-
-#if ENABLED(FILWIDTH_SENSOR_USE_I2C)
-  /// Request a filament-width sensor update from interrupt context.
+  static float sample_to_size_ratio();
   static void schedule_update();
-
-  /// Service any pending sensor update in task context.
   static void service_update();
-
-  /// List all detected devices on the configured I2C bus.
-  static void log_i2c_devices();
-
-  /// Poll the external filament-width sensor over I2C. Returns true on success.
   static bool update_from_sensor();
-#else
-  // Apply a single ADC reading to the raw value
-  static void accumulate(const uint16_t adc) {
-    if (adc > 102)  // Ignore ADC under 0.5 volts
-      accum += (uint32_t(adc) << 7) - (accum >> 7);
-  }
 
-  // Convert raw measurement to mm
-  static inline float raw_to_mm(const uint16_t v) { return v * 5.0f * RECIPROCAL(16383.0f); }
-  static inline float raw_to_mm() { return raw_to_mm(raw); }
-
-  // A scaled reading is ready
-  // Divide to get to 0-16384 range since we used 1/128 IIR filter approach
-  static inline void reading_ready() { raw = accum >> 10; }
-
-  // Update mm from the raw measurement
-  static inline void update_measured_mm() { measured_mm = raw_to_mm(); }
-#endif
-
-  // Update ring buffer used to delay filament measurements
-  static inline void advance_e(const float &e_move) {
-
-    // Increment counters with the E distance
-    e_count += e_move;
-    delay_dist += e_move;
-
-    // Only get new measurements on forward E movement
-    if (!UNEAR_ZERO(e_count)) {
-
-      // Loop the delay distance counter (modulus by the mm length)
-      while (delay_dist >= MMD_MM) delay_dist -= MMD_MM;
-
-      // Convert into an index (cm) into the measurement array
-      index_r = int8_t(delay_dist * 0.1f);
-
-      // If the ring buffer is not full...
-      if (index_r != index_w) {
-        e_count = 0;                            // Reset the E movement counter
-        const int8_t meas_sample = sample_to_size_ratio();
-        do {
-          if (++index_w >= MMD_CM) index_w = 0; // The next unused slot
-          ratios[index_w] = meas_sample;        // Store the measurement
-        } while (index_r != index_w);           // More slots to fill?
-      }
-    }
-  }
-
-  // Dynamically set the volumetric multiplier based on the delayed width measurement.
+  static inline void advance_e(const float &e_move);
   static inline void update_volumetric() {
     if (enabled) {
       int8_t read_index = index_r - meas_delay_cm;
@@ -132,6 +99,11 @@ public:
     }
   }
 
+private:
+  static inline float get_area_mm2(const float major_mm, const float minor_mm) {
+    return 0.25f * PI * major_mm * minor_mm;
+  }
+  static inline void refresh_nominal_area() { nominal_area = get_area_mm2(nominal_mm, nominal_mm); }
 };
 
 extern FilamentWidthSensor filwidth;

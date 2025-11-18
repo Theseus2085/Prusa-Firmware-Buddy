@@ -921,7 +921,7 @@ void Planner::check_axes_activity() {
    * into a volumetric multiplier. Conversion differs when using
    * linear extrusion vs volumetric extrusion.
    */
-  void Planner::apply_filament_width_sensor(const int8_t encoded_ratio) {
+  void Planner::apply_filament_width_sensor(const float encoded_ratio) {
     // Reconstitute the nominal/measured ratio
     const float nom_meas_ratio = 1 + 0.01f * encoded_ratio,
                 ratio_2 = sq(nom_meas_ratio);
