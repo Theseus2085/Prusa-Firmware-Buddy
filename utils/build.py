@@ -622,7 +622,7 @@ def cmake_cache_entry(arg):
 
 
 def main():
-    bootstrap.switch_to_venv_if_nedded()
+    bootstrap.switch_to_venv_if_needed()
 
     all_presets = load_presets()
     parser = argparse.ArgumentParser()

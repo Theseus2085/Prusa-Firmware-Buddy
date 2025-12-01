@@ -89,7 +89,7 @@ public:
   static void service_update();
   static bool update_from_sensor();
 
-  static inline void advance_e(const float &e_move);
+  static void advance_e(const float &e_move);
   static inline void update_volumetric() {
     if (enabled) {
       int8_t read_index = index_r - meas_delay_cm;

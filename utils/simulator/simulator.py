@@ -7,12 +7,12 @@ from typing import Optional, Tuple, Callable, List
 from contextlib import asynccontextmanager, AsyncExitStack, closing
 
 from PIL import Image
-from bootstrap import get_dependency_directory, switch_to_venv_if_nedded
+from bootstrap import get_dependency_directory, switch_to_venv_if_needed
 from .printer import Thermistor, MachineType, NetworkInterface
 
 logger = logging.getLogger('simulator')
 
-switch_to_venv_if_nedded()
+switch_to_venv_if_needed()
 
 
 class Simulator:

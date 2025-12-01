@@ -27,6 +27,7 @@
 #include "filwidth.h"
 
 #include <cmath>
+#include <algorithm>
 
 #include <atomic>
 #include "i2c.hpp"
@@ -135,8 +136,8 @@ void FilamentWidthSensor::init() {
 }
 
 float FilamentWidthSensor::sample_to_size_ratio() {
-  const float axis_a = MAX(latest_axes_mm[0], 0.01f);
-  const float axis_b = MAX(latest_axes_mm[1], 0.01f);
+  const float axis_a = std::max(latest_axes_mm[0], 0.01f);
+  const float axis_b = std::max(latest_axes_mm[1], 0.01f);
   const float area = get_area_mm2(axis_a, axis_b);
   if (nominal_area <= 0.0f) return 0.0f;
   return (area / nominal_area) * 100.0f - 100.0f;
@@ -222,7 +223,7 @@ void FilamentWidthSensor::process_ready_samples() {
 }
 
 float FilamentWidthSensor::compute_equivalent_diameter(const float axis_a_mm, const float axis_b_mm) {
-  const float safe_product = MAX(axis_a_mm * axis_b_mm, 0.0001f);
+  const float safe_product = std::max(axis_a_mm * axis_b_mm, 0.0001f);
   return sqrtf(safe_product);
 }
 
