@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <numeric>
 #include <limits>
+#include <cstring>
 #include <common/sensor_data.hpp>
 #include <common/sys.hpp>
 #include "timing.h"
@@ -23,8 +24,82 @@
 #include "feature/prusa/e-stall_detector.h"
 
 LOG_COMPONENT_DEF(Loadcell, logging::Severity::info);
+#ifdef LOADCELL_CSV_STREAMING
+    #ifndef LOADCELL_CSV_STREAM_INTERVAL_MS
+        #define LOADCELL_CSV_STREAM_INTERVAL_MS 5000
+    #endif
+    #include "../Marlin/src/core/serial.h"
+#endif
 
 Loadcell loadcell;
+
+#ifdef LOADCELL_CSV_STREAMING
+namespace {
+
+constexpr uint32_t loadcell_stream_interval_us = LOADCELL_CSV_STREAM_INTERVAL_MS * 1000UL;
+uint32_t last_stream_timestamp_us = 0;
+bool loadcell_stream_announced = false;
+
+inline uint32_t pack_float_to_bits(const float value) {
+    static_assert(sizeof(uint32_t) == sizeof(float), "float packing size mismatch");
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+inline float unpack_bits_to_float(const uint32_t bits) {
+    static_assert(sizeof(uint32_t) == sizeof(float), "float unpack size mismatch");
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+inline void log_stream_activation_once() {
+    if (loadcell_stream_announced) {
+        return;
+    }
+    log_info(Loadcell,
+        "Loadcell CSV streaming active (interval=%lu us)",
+        static_cast<unsigned long>(loadcell_stream_interval_us));
+    loadcell_stream_announced = true;
+}
+
+inline bool should_emit_loadcell_csv_sample(const uint32_t timestamp_us) {
+    if (!loadcell_stream_interval_us) {
+        last_stream_timestamp_us = timestamp_us;
+        log_debug(Loadcell, "LC CSV emit (interval disabled) @%lu", static_cast<unsigned long>(timestamp_us));
+        return true;
+    }
+
+    if (!last_stream_timestamp_us) {
+        last_stream_timestamp_us = timestamp_us;
+    }
+
+    if (ticks_diff(timestamp_us, last_stream_timestamp_us) >= int32_t(loadcell_stream_interval_us)) {
+        last_stream_timestamp_us = timestamp_us;
+        log_debug(Loadcell, "LC CSV emit (elapsed=%ld us)", long(loadcell_stream_interval_us));
+        return true;
+    }
+
+    log_debug(Loadcell,
+        "LC CSV suppressed (dt=%ld us < interval)",
+        long(ticks_diff(timestamp_us, last_stream_timestamp_us)));
+    return false;
+}
+
+inline void emit_loadcell_csv_sample(const uint32_t timestamp_us, const float load_g) {
+    SERIAL_ECHOPGM("LC_CSV,");
+    SERIAL_ECHO(timestamp_us);
+    SERIAL_CHAR(',');
+    SERIAL_ECHOLN(load_g);
+    log_info(Loadcell,
+        "LC CSV sample t=%lu load=%.3f g",
+        static_cast<unsigned long>(timestamp_us),
+        static_cast<double>(load_g));
+}
+
+} // namespace
+#endif
 
 Loadcell::Loadcell()
     : failsOnLoadAbove(INFINITY)
@@ -176,6 +251,10 @@ void Loadcell::ProcessSample(int32_t loadcellRaw, uint32_t time_us) {
 
     const float tared_z_load = get_tared_z_load();
     sensor_data().loadCell = tared_z_load;
+#ifdef LOADCELL_CSV_STREAMING
+    csv_latest_sample_timestamp_us.store(time_us, std::memory_order_relaxed);
+    csv_latest_sample_load_bits.store(pack_float_to_bits(tared_z_load), std::memory_order_relaxed);
+#endif
     if (!std::isfinite(tared_z_load)) {
         fatal_error(ErrCode::ERR_SYSTEM_LOADCELL_INFINITE_LOAD);
     }
@@ -255,6 +334,25 @@ void Loadcell::ProcessSample(int32_t loadcellRaw, uint32_t time_us) {
     // Perform E motor stall detection
     EMotorStallDetector::Instance().ProcessSample(this->loadcellRaw);
 }
+
+#ifdef LOADCELL_CSV_STREAMING
+void Loadcell::StreamCsvTick() {
+    const uint32_t sample_timestamp_us = csv_latest_sample_timestamp_us.load(std::memory_order_relaxed);
+    if (!sample_timestamp_us) {
+        return;
+    }
+
+    const float sample_load = unpack_bits_to_float(csv_latest_sample_load_bits.load(std::memory_order_relaxed));
+    if (!std::isfinite(sample_load)) {
+        return;
+    }
+
+    log_stream_activation_once();
+    if (should_emit_loadcell_csv_sample(sample_timestamp_us)) {
+        emit_loadcell_csv_sample(sample_timestamp_us, sample_load);
+    }
+}
+#endif
 
 void Loadcell::HomingSafetyCheck() const {
     // We need signed int because the last sample can be slightly in the future, caused by time sync with dwarves.

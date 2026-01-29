@@ -28,6 +28,16 @@
 #include <option/has_crash_detection.h>
 #include <option/has_pause.h>
 #include <option/has_power_panic.h>
+#include <option/has_loadcell.h>
+
+#if HAS_LOADCELL()
+    #ifndef LOADCELL_CSV_STREAMING
+        #define LOADCELL_CSV_STREAMING
+    #endif
+    #ifndef LOADCELL_CSV_STREAM_INTERVAL_MS
+        #define LOADCELL_CSV_STREAM_INTERVAL_MS 1000 // Minimum interval between streamed samples (ms)
+    #endif
+#endif
 
 /**
  * Configuration_adv.h

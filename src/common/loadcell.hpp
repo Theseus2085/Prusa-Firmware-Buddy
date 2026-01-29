@@ -88,6 +88,10 @@ public:
     void ProcessSample(int32_t loadcellRaw, uint32_t time_us);
     inline uint32_t GetLastSampleTimeUs() const { return last_sample_time_us; }
 
+#ifdef LOADCELL_CSV_STREAMING
+    void StreamCsvTick();
+#endif
+
     bool GetMinZEndstop() const;
     bool GetXYEndstop() const;
 
@@ -291,6 +295,13 @@ private:
     // atomic because its set in interrupt/puppytask, read in default task
     std::atomic<uint32_t> last_sample_time_us;
     static_assert(std::atomic<decltype(last_sample_time_us)::value_type>::is_always_lock_free, "Lock free type must be used from ISR.");
+
+#ifdef LOADCELL_CSV_STREAMING
+    std::atomic<uint32_t> csv_latest_sample_timestamp_us { 0 };
+    std::atomic<uint32_t> csv_latest_sample_load_bits { 0 };
+    static_assert(decltype(csv_latest_sample_timestamp_us)::is_always_lock_free, "Lock free type must be used from ISR.");
+    static_assert(decltype(csv_latest_sample_load_bits)::is_always_lock_free, "Lock free type must be used from ISR.");
+#endif
 };
 
 extern Loadcell loadcell;

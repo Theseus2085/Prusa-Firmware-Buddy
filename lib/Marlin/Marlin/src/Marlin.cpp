@@ -524,6 +524,10 @@ void idle(bool waiting) {
     }
   #endif
 
+#if ENABLED(NOZZLE_LOAD_CELL) && defined(LOADCELL_CSV_STREAMING)
+  loadcell.StreamCsvTick();
+#endif
+
   if (waiting) delay(1);
 }
 
