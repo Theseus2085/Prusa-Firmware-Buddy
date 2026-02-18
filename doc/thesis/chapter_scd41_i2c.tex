@@ -1,0 +1,259 @@
+\chapter{SCD41 I2C Communication Integration on Prusa MK4}
+\label{chap:scd41-i2c}
+
+This chapter documents the final active functional changes relative to the upstream \texttt{prusa3d/Prusa-Firmware-Buddy} baseline for integrating an SCD41 sensor on MK4 via connector J23 (\texttt{I2C2}). Debug-only and temporary diagnostic edits are explicitly excluded from the functional scope.
+
+\section{System Context and Bus Topology}
+The SCD41 integration reuses the firmware filament-width feature path with \texttt{FILWIDTH\_SENSOR\_USE\_I2C} enabled and targets the same hardware I2C peripheral used by the optional GPIO-hacker interface (\texttt{io\_expander2} handle). Communication is implemented as an optional, non-fatal runtime path in \texttt{filwidth.cpp}; boot-critical behavior remains governed by existing platform startup logic. The configured SCD41 7-bit address is \texttt{0x62}.
+
+\section{Communication Lifecycle}
+Runtime execution follows this sequence:
+\begin{enumerate}
+  \item ISR-safe trigger: \texttt{schedule\_update()} sets a pending flag (\texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:131-133}).
+  \item Task-context servicing: \texttt{service\_update()} consumes the pending flag and calls \texttt{update\_from\_sensor()} (\texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:135-139}).
+  \item SCD41 state machine entry: \texttt{update\_from\_sensor()} (\texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:145}).
+  \item Protocol commands:
+  \begin{enumerate}
+    \item Start periodic measurement: \texttt{0x21B1}.
+    \item Poll data-ready status: \texttt{0xE4B8}.
+    \item Read measurement frame: \texttt{0xEC05}.
+  \end{enumerate}
+  Command constants are defined at \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:50-52}; command flow is in \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:152-208}.
+  \item CRC validation uses Sensirion CRC8 (\texttt{poly=0x31, init=0xFF}) at \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:63-71}; checks are applied to readiness and measurement words at \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:191-193} and \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:210-215}.
+  \item Conversion and publish: parsed values are converted and printed as \texttt{SCD41 co2\_ppm=... temp\_c=... rh\_pct=...} in \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:217-233}.
+\end{enumerate}
+
+\section{Functional Change Log}
+
+\subsection*{CFG-01}
+\textbf{File and lines:} \texttt{include/marlin/Configuration\_MK4\_adv.h:2120} \\
+\textbf{Reason:} Set the correct SCD41 slave address for all filwidth-I2C transactions. \\
+\textbf{What it does:} Changes sensor address configuration to \texttt{0x62}.
+
+\begin{lstlisting}[language=C++,caption={CFG-01: SCD41 I2C address configuration},label={lst:cfg-01}]
+#define FILWIDTH_SENSOR_I2C_ADDRESS 0x62 // 7-bit address of the external filament width sensor (SCD41)
+\end{lstlisting}
+
+\subsection*{API-01}
+\textbf{File and lines:} \texttt{lib/Marlin/Marlin/src/feature/filwidth.h:67-77} \\
+\textbf{Reason:} Expose the I2C-backed sensor update flow through the existing filament-width interface. \\
+\textbf{What it does:} Declares update scheduling, service, SCD41 publish helper, and sensor polling entry points.
+
+\begin{lstlisting}[language=C++,caption={API-01: FilamentWidthSensor I2C/SCD41 method interface},label={lst:api-01}]
+/// Request a filament-width sensor update from interrupt context.
+static void schedule_update();
+
+/// Service any pending sensor update in task context.
+static void service_update();
+
+/// Read SCD41 from the filwidth I2C port and publish readings to serial.
+static void get_and_publish_scd41();
+
+/// Poll the external filament-width sensor over I2C. Returns true on success.
+static bool update_from_sensor();
+\end{lstlisting}
+
+\subsection*{I2C-01}
+\textbf{File and lines:} \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:37-38} \\
+\textbf{Reason:} Keep optional-device transactions short and bounded on a shared bus. \\
+\textbf{What it does:} Defines 5\,ms transaction timeout and bounded initialization retries.
+
+\begin{lstlisting}[language=C++,caption={I2C-01: Timeout and retry policy for SCD41 transactions},label={lst:i2c-01}]
+constexpr uint32_t sensor_i2c_timeout_ms = 5;
+constexpr uint8_t scd41_init_retries = 3;
+\end{lstlisting}
+
+\subsection*{PROTO-01}
+\textbf{File and lines:} \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:50-60} \\
+\textbf{Reason:} Encode the SCD41 protocol constants and runtime state for non-blocking polling. \\
+\textbf{What it does:} Declares command words and state/timing variables used by the polling state machine.
+
+\begin{lstlisting}[language=C++,caption={PROTO-01: SCD41 command set and state variables},label={lst:proto-01}]
+// SCD41 command words (MSB-first).
+constexpr uint16_t scd41_cmd_start_periodic = 0x21B1;
+constexpr uint16_t scd41_cmd_get_data_ready = 0xE4B8;
+constexpr uint16_t scd41_cmd_read_measurement = 0xEC05;
+
+std::atomic<bool> filament_update_pending { false };
+// Tracks whether periodic measurement mode is armed on the sensor.
+bool scd41_started = false;
+// Schedule points for polling, warnings, and serial output.
+millis_t next_poll_ms = 0;
+millis_t next_warn_ms = 0;
+millis_t last_print_ms = 0;
+\end{lstlisting}
+
+\subsection*{PROTO-02}
+\textbf{File and lines:} \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:152-208} \\
+\textbf{Reason:} Replace legacy byte-decoding with the required SCD41 command-response sequence. \\
+\textbf{What it does:} Implements start-periodic, readiness polling, and measurement frame reads with retry-aware control flow.
+
+\begin{lstlisting}[language=C++,caption={PROTO-02: SCD41 polling state machine in update\_from\_sensor()},label={lst:proto-02}]
+if (!scd41_started) {
+  i2c::Result init_result = i2c::Result::error;
+  bool device_ack_seen = false;
+
+  // Retry a few times to absorb transient bus arbitration failures on shared I2C2.
+  for (uint8_t attempt = 0; attempt < scd41_init_retries; ++attempt) {
+    init_result = i2c::IsDeviceReady(hi2c, uint16_t(sensor_address << 1), 1, sensor_i2c_timeout_ms);
+    if (init_result != i2c::Result::ok) continue;
+
+    device_ack_seen = true;
+    init_result = scd41_send_command(hi2c, scd41_cmd_start_periodic);
+    if (init_result == i2c::Result::ok) {
+      scd41_started = true;
+      next_poll_ms = now + scd41_first_sample_delay_ms;
+      return false;
+    }
+  }
+
+  next_poll_ms = now + scd41_poll_interval_ms;
+  if (scd41_should_warn(now)) {
+    SERIAL_ECHO_START();
+    if (device_ack_seen)
+      SERIAL_ECHOLNPAIR(" SCD41: start_periodic_failed=", int(init_result));
+    else
+      SERIAL_ECHOLNPAIR(" SCD41: device_not_ready=", int(init_result));
+  }
+  return false;
+}
+
+// Command sequence: GetDataReadyStatus -> read 2B + CRC -> ReadMeasurement.
+const auto ready_cmd_result = scd41_send_command(hi2c, scd41_cmd_get_data_ready);
+if (ready_cmd_result != i2c::Result::ok)
+  return scd41_fail_and_retry(now, "data_ready_cmd_failed", int(ready_cmd_result));
+
+uint8_t ready_buf[3] = { 0 };
+const auto ready_read_result = i2c::Receive(hi2c, uint16_t((sensor_address << 1) | 0x1), ready_buf, sizeof(ready_buf), sensor_i2c_timeout_ms);
+if (ready_read_result != i2c::Result::ok)
+  return scd41_fail_and_retry(now, "data_ready_read_failed", int(ready_read_result));
+
+const uint16_t ready_word = (uint16_t(ready_buf[0]) << 8) | uint16_t(ready_buf[1]);
+if ((ready_word & 0x07FFU) == 0) {
+  next_poll_ms = now + scd41_poll_interval_ms;
+  return false;
+}
+
+const auto read_cmd_result = scd41_send_command(hi2c, scd41_cmd_read_measurement);
+if (read_cmd_result != i2c::Result::ok)
+  return scd41_fail_and_retry(now, "read_cmd_failed", int(read_cmd_result));
+
+uint8_t buf[9] = { 0 };
+const auto read_result = i2c::Receive(hi2c, uint16_t((sensor_address << 1) | 0x1), buf, sizeof(buf), sensor_i2c_timeout_ms);
+if (read_result != i2c::Result::ok)
+  return scd41_fail_and_retry(now, "read_failed", int(read_result));
+\end{lstlisting}
+
+\subsection*{SAFE-01}
+\textbf{File and lines:} \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:63-71, 86-102, 191-193, 210-215} \\
+\textbf{Reason:} Ensure frame integrity and force deterministic recovery on corrupted or failed I2C exchanges. \\
+\textbf{What it does:} Adds CRC8 validation and a centralized fail-and-retry path that resets SCD41 session state.
+
+\begin{lstlisting}[language=C++,caption={SAFE-01a: CRC8 implementation and fail/retry handler},label={lst:safe-01a}]
+// Sensirion CRC8: polynomial 0x31, init 0xFF, 8-bit width.
+uint8_t sensirion_crc8(const uint8_t *data, const uint8_t len) {
+  uint8_t crc = 0xFF;
+  for (uint8_t i = 0; i < len; ++i) {
+    crc ^= data[i];
+    for (uint8_t b = 0; b < 8; ++b)
+      crc = (crc & 0x80) ? uint8_t((crc << 1) ^ 0x31) : uint8_t(crc << 1);
+  }
+  return crc;
+}
+
+// Reset state on any I2C/CRC error to force a clean re-sync next cycle.
+// This prevents stale state if the device was hot-plugged or wedged.
+bool scd41_fail_and_retry(const millis_t now, const char *msg, const int code) {
+  scd41_started = false;
+  next_poll_ms = now + scd41_poll_interval_ms;
+
+  if (scd41_should_warn(now)) {
+    SERIAL_ECHO_START();
+    SERIAL_ECHOPGM(" SCD41: ");
+    SERIAL_ECHO(msg);
+    if (code >= 0) {
+      SERIAL_ECHOPGM("=");
+      SERIAL_ECHO(code);
+    }
+    SERIAL_EOL();
+  }
+  return false;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=C++,caption={SAFE-01b: Readiness and measurement CRC enforcement},label={lst:safe-01b}]
+// Data-ready response is a single 16-bit word plus CRC.
+if (sensirion_crc8(ready_buf, 2) != ready_buf[2])
+  return scd41_fail_and_retry(now, "data_ready_crc_mismatch", -1);
+
+// Each 16-bit word (CO2, temp, RH) is followed by its own CRC byte.
+for (uint8_t i = 0; i < 3; ++i) {
+  const uint8_t *word = &buf[i * 3];
+  if (sensirion_crc8(word, 2) != word[2])
+    return scd41_fail_and_retry(now, "measurement_crc_mismatch", -1);
+}
+\end{lstlisting}
+
+\subsection*{OUT-01}
+\textbf{File and lines:} \texttt{lib/Marlin/Marlin/src/feature/filwidth.cpp:224-233} \\
+\textbf{Reason:} Publish parsed SCD41 values in a stable, machine-readable serial format. \\
+\textbf{What it does:} Emits throttled output lines with CO\textsubscript{2}, temperature, and relative humidity.
+
+\begin{lstlisting}[language=C++,caption={OUT-01: Formatted SCD41 serial output},label={lst:out-01}]
+if (ELAPSED(now, last_print_ms + scd41_print_interval_ms)) {
+  SERIAL_ECHO_START();
+  SERIAL_ECHOPGM(" SCD41 co2_ppm=");
+  SERIAL_ECHO(int(co2_ppm));
+  SERIAL_ECHOPGM(" temp_c=");
+  SERIAL_ECHO(temp_c);
+  SERIAL_ECHOPGM(" rh_pct=");
+  SERIAL_ECHOLN(rh_pct);
+  last_print_ms = now;
+}
+\end{lstlisting}
+
+\subsection*{BUS-01}
+\textbf{File and lines:} \texttt{src/device/stm32f4/peripherals.cpp:479} \\
+\textbf{Reason:} Ensure the synthetic I2C stop sequence releases SDA high, matching I2C stop semantics. \\
+\textbf{What it does:} Sets SDA to \texttt{GPIO\_PIN\_SET} in deadlock-recovery stop generation.
+
+\begin{lstlisting}[language=C++,caption={BUS-01: Deadlock recovery stop condition with SDA release},label={lst:bus-01}]
+set_pin_od(sda); // reconfigure SDA to open-drain, to be able to move it
+HAL_GPIO_WritePin(sda.port, sda.no, GPIO_PIN_RESET); // set SDA to '0' while SCL == '1' - start condition
+delay_us_precise(i2c_get_edge_us(clk)); // wait half period
+HAL_GPIO_WritePin(sda.port, sda.no, GPIO_PIN_SET); // set SDA to '1' while SCL == '1' - stop condition
+delay_us_precise(i2c_get_edge_us(clk)); // wait half period
+\end{lstlisting}
+
+\section{Conditions for Successful Communication}
+Successful SCD41 communication on MK4/J23 requires all of the following:
+\begin{enumerate}
+  \item Correct electrical wiring: \texttt{3V3, GND, SDA, SCL} with SDA/SCL not swapped.
+  \item Shared-bus compatibility: sensor at \texttt{0x62} and no conflicting address/device on J23.
+  \item Firmware configuration: \texttt{FILWIDTH\_SENSOR\_USE\_I2C} enabled and address set to \texttt{0x62}.
+  \item Runtime cadence: state machine allowed to run periodically (\texttt{schedule\_update/service\_update} active).
+  \item Valid protocol frames: CRC checks must pass for readiness and measurement words.
+\end{enumerate}
+
+\section{Verification Procedure}
+Use this procedure to validate functional behavior after flashing:
+\begin{enumerate}
+  \item Boot printer with SCD41 disconnected: verify normal startup.
+  \item Boot with SCD41 connected on J23: verify normal startup and no boot hang.
+  \item Observe serial output after boot: verify periodic lines in the form
+  \texttt{SCD41 co2\_ppm=<value> temp\_c=<value> rh\_pct=<value>}.
+  \item Disconnect and reconnect SCD41 during runtime: verify recovery and resumed value output.
+  \item Confirm no filament-compensation corruption from SCD41 payload (filament-width legacy decode path is not used for SCD41 frames).
+\end{enumerate}
+
+\section{Excluded Debug/Temporary Changes}
+The following were intentionally excluded from this functional chapter scope:
+\begin{enumerate}
+  \item Early I2C2 BSOD probe/instrumentation edits in \texttt{src/device/stm32f4/peripherals.cpp} (except the functional STOP fix at line 479).
+  \item EEPROM diagnostic instrumentation in \texttt{src/common/st25dv64k.cpp}.
+\end{enumerate}
+
+To integrate this chapter into the thesis, include:
+\begin{lstlisting}[language={[LaTeX]TeX},caption={Chapter include example},label={lst:chapter-include}]
+\input{doc/thesis/chapter_scd41_i2c.tex}
+\end{lstlisting}
