@@ -81,7 +81,10 @@ public:
   FilamentWidthSensor() { init(); }
 
   static void init();
-  static inline void enable(const bool ena) { enabled = ena; }
+  static inline void enable(const bool ena) {
+    if (ena && !enabled) reset_poll_state();
+    enabled = ena;
+  }
   static inline void set_delay_cm(const uint8_t cm) { meas_delay_cm = _MIN(cm, MAX_MEASUREMENT_DELAY); }
 
   static float sample_to_size_ratio();
@@ -104,6 +107,7 @@ private:
     return 0.25f * PI * major_mm * minor_mm;
   }
   static inline void refresh_nominal_area() { nominal_area = get_area_mm2(nominal_mm, nominal_mm); }
+  static void reset_poll_state();
 };
 
 extern FilamentWidthSensor filwidth;

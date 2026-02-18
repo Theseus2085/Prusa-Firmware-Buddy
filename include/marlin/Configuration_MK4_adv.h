@@ -2119,7 +2119,7 @@
     #define FILWIDTH_SENSOR_USE_I2C
     #define FILWIDTH_SENSOR_SPACING_MM 30.0f
     #define FILWIDTH_SENSOR_I2C_ADDRESS 0x42 // 7-bit address of the external filament width sensor
-    #define FILWIDTH_SENSOR_TIMEOUT_MS 200 // Timeout for I2C transactions with the filament sensor
+    #define FILWIDTH_SENSOR_TIMEOUT_MS 5 // Timeout for I2C transactions with the filament sensor
     #define FILWIDTH_SENSOR_DIGITS 5 // Number of digits provided by the filament width sensor (first digit is the millimeter)
 
     #define FILWIDTH_ERROR_MARGIN 5.0 // (mm) If a measurement differs too much from nominal width ignore it

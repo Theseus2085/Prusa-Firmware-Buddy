@@ -31,6 +31,7 @@
 
 #include <atomic>
 #include "i2c.hpp"
+#include "../core/serial.h"
 
 FilamentWidthSensor filwidth;
 
@@ -64,7 +65,10 @@ namespace {
   constexpr uint8_t sensor_digits_per_axis   = 5;
   constexpr uint8_t sensor_payload_bytes     = sensor_axes * sensor_digits_per_axis;
   constexpr uint8_t sensor_address           = FILWIDTH_SENSOR_I2C_ADDRESS;
-  constexpr uint32_t sensor_timeout_ms       = FILWIDTH_SENSOR_TIMEOUT_MS;
+  constexpr uint32_t sensor_i2c_timeout_ms   = 5;
+  constexpr uint8_t sensor_ready_retries     = 3;
+  constexpr millis_t sensor_poll_interval_ms = 250UL;
+  constexpr millis_t sensor_warn_interval_ms = 3000UL;
 
   bool decode_axis_digits(const uint8_t *buffer, const uint8_t length, float &out_mm) {
     if (!buffer || length == 0) return false;
@@ -111,6 +115,38 @@ namespace {
   }
 
   std::atomic<bool> filament_update_pending { false };
+  millis_t next_poll_ms = 0;
+  millis_t next_warn_ms = 0;
+
+  bool should_warn(const millis_t now) {
+    if (!ELAPSED(now, next_warn_ms)) return false;
+    next_warn_ms = now + sensor_warn_interval_ms;
+    return true;
+  }
+
+  bool fail_and_reschedule(const millis_t now, const char *msg, const int code) {
+    next_poll_ms = now + sensor_poll_interval_ms;
+    if (should_warn(now)) {
+      SERIAL_ECHO_START();
+      SERIAL_ECHOPGM(" FilWidth I2C: ");
+      SERIAL_ECHO(msg);
+      if (code >= 0) {
+        SERIAL_ECHOPGM("=");
+        SERIAL_ECHO(code);
+      }
+      SERIAL_EOL();
+    }
+    return false;
+  }
+
+  i2c::Result wait_device_ready(I2C_HandleTypeDef &i2c_handle) {
+    i2c::Result ready_result = i2c::Result::error;
+    for (uint8_t attempt = 0; attempt < sensor_ready_retries; ++attempt) {
+      ready_result = i2c::IsDeviceReady(i2c_handle, uint16_t(sensor_address << 1), 1, sensor_i2c_timeout_ms);
+      if (ready_result == i2c::Result::ok) break;
+    }
+    return ready_result;
+  }
 }
 
 void FilamentWidthSensor::init() {
@@ -133,6 +169,13 @@ void FilamentWidthSensor::init() {
       sensor_targets_mm[axis][slot] = 0.0f;
     }
   }
+
+  reset_poll_state();
+}
+
+void FilamentWidthSensor::reset_poll_state() {
+  next_poll_ms = 0;
+  next_warn_ms = 0;
 }
 
 float FilamentWidthSensor::sample_to_size_ratio() {
@@ -148,31 +191,44 @@ void FilamentWidthSensor::schedule_update() {
 }
 
 void FilamentWidthSensor::service_update() {
-  if (!filament_update_pending.exchange(false, std::memory_order_acq_rel)) return;
-  if (!enabled) return;
-  update_from_sensor();
+  if (!filament_update_pending.exchange(false, std::memory_order_acq_rel) || !enabled) return;
+
+  const millis_t now = millis();
+  if (PENDING(now, next_poll_ms)) return;
+
+  (void)update_from_sensor();
 }
 
 bool FilamentWidthSensor::update_from_sensor() {
+  const millis_t now = millis();
+  if (PENDING(now, next_poll_ms)) return false;
+
+  I2C_HandleTypeDef &i2c_handle = I2C_HANDLE_FOR(io_expander2);
+  const auto ready_result = wait_device_ready(i2c_handle);
+  if (ready_result != i2c::Result::ok)
+    return fail_and_reschedule(now, "device_not_ready", int(ready_result));
+
   uint8_t buffer[sensor_payload_bytes] = { 0 };
   const auto result = i2c::Receive(
-    I2C_HANDLE_FOR(io_expander2),
-    (sensor_address << 1) | 0x1,
+    i2c_handle,
+    uint16_t((sensor_address << 1) | 0x1),
     buffer,
     sensor_payload_bytes,
-    sensor_timeout_ms
+    sensor_i2c_timeout_ms
   );
 
   if (result != i2c::Result::ok)
-    return false;
+    return fail_and_reschedule(now, "read_failed", int(result));
 
   float axes_mm[sensor_axes] = { latest_axes_mm[0], latest_axes_mm[1] };
   if (!decode_sensor_payload(buffer, sensor_payload_bytes, axes_mm))
-    return false;
+    return fail_and_reschedule(now, "decode_failed", -1);
 
   enqueue_sensor_sample(0, axes_mm[0]);
   enqueue_sensor_sample(1, axes_mm[1]);
   process_ready_samples();
+
+  next_poll_ms = now + sensor_poll_interval_ms;
   return true;
 }
 
