@@ -2117,7 +2117,7 @@
     #define MEASUREMENT_DELAY_CM 1 // (cm) The distance from the filament sensor to the melting chamber
 
     #define FILWIDTH_SENSOR_USE_I2C
-    #define FILWIDTH_SENSOR_I2C_ADDRESS 0x42 // 7-bit address of the external filament width sensor
+    #define FILWIDTH_SENSOR_I2C_ADDRESS 0x62 // 7-bit address of the external filament width sensor (SCD41)
     #define FILWIDTH_SENSOR_TIMEOUT_MS 200 // Timeout for I2C transactions with the filament sensor
     #define FILWIDTH_SENSOR_DIGITS 5 // Number of digits provided by the filament width sensor (first digit is the millimeter)
 

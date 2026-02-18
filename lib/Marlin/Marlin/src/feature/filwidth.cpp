@@ -32,56 +32,75 @@
 
   namespace {
 
-  constexpr uint8_t sensor_address = 0x62; // SCD41 I2C 7-bit address
-    constexpr uint8_t sensor_digits = FILWIDTH_SENSOR_DIGITS;
-    constexpr uint32_t sensor_timeout_ms = FILWIDTH_SENSOR_TIMEOUT_MS;
+    constexpr uint8_t sensor_address = FILWIDTH_SENSOR_I2C_ADDRESS;
+    // Match io-expander style transactions on this shared optional-device path.
+    constexpr uint32_t sensor_i2c_timeout_ms = 5;
+    constexpr uint8_t scd41_init_retries = 3;
 
-    bool decode_sensor_digits(const uint8_t *buffer, const uint8_t length, float &out_mm) {
-      if (!buffer) return false;
+    // Poll cadence for data-ready checks; SCD41 updates every ~5s, but we probe faster.
+    constexpr millis_t scd41_poll_interval_ms = 1000UL;
+    // Throttle serial output to avoid flooding.
+    constexpr millis_t scd41_print_interval_ms = 3000UL;
+    // Throttle warning logs to keep UART readable.
+    constexpr millis_t scd41_warn_interval_ms = 3000UL;
+    // First read needs a full measurement period after start command.
+    constexpr millis_t scd41_first_sample_delay_ms = 5000UL;
 
-      uint8_t digits_collected = 0;
-      uint8_t digits[sensor_digits] = { 0 };
+    // SCD41 command words (MSB-first).
+    constexpr uint16_t scd41_cmd_start_periodic = 0x21B1;
+    constexpr uint16_t scd41_cmd_get_data_ready = 0xE4B8;
+    constexpr uint16_t scd41_cmd_read_measurement = 0xEC05;
 
-      for (uint8_t i = 0; i < length && digits_collected < sensor_digits; ++i) {
-        const uint8_t value = buffer[i];
+    std::atomic<bool> filament_update_pending { false };
+    // Tracks whether periodic measurement mode is armed on the sensor.
+    bool scd41_started = false;
+    // Schedule points for polling, warnings, and serial output.
+    millis_t next_poll_ms = 0;
+    millis_t next_warn_ms = 0;
+    millis_t last_print_ms = 0;
 
-        if (value == '\n' || value == '\r' || value == ' ') continue;
-        if (value == '.') continue;
-
-        uint8_t digit;
-        if (value <= 9) {
-          digit = value;
-        }
-        else if (value >= '0' && value <= '9') {
-          digit = value - '0';
-        }
-        else {
-          return false;
-        }
-
-        digits[digits_collected++] = digit;
+    // Sensirion CRC8: polynomial 0x31, init 0xFF, 8-bit width.
+    uint8_t sensirion_crc8(const uint8_t *data, const uint8_t len) {
+      uint8_t crc = 0xFF;
+      for (uint8_t i = 0; i < len; ++i) {
+        crc ^= data[i];
+        for (uint8_t b = 0; b < 8; ++b)
+          crc = (crc & 0x80) ? uint8_t((crc << 1) ^ 0x31) : uint8_t(crc << 1);
       }
+      return crc;
+    }
 
-      if (digits_collected != sensor_digits)
-        return false;
-
-      float result = digits[0];
-      float scale = 0.1f;
-      for (uint8_t i = 1; i < sensor_digits; ++i, scale *= 0.1f)
-        result += digits[i] * scale;
-
-      if (!WITHIN(result, 0.5f, 3.5f))
-        return false;
-
-      out_mm = result;
+    bool scd41_should_warn(const millis_t now) {
+      if (!ELAPSED(now, next_warn_ms)) return false;
+      next_warn_ms = now + scd41_warn_interval_ms;
       return true;
     }
 
-  } // namespace
+    i2c::Result scd41_send_command(I2C_HandleTypeDef &hi2c, const uint16_t command) {
+      uint8_t cmd[2] = { uint8_t(command >> 8), uint8_t(command & 0xFF) };
+      return i2c::Transmit(hi2c, uint16_t(sensor_address << 1), cmd, sizeof(cmd), sensor_i2c_timeout_ms);
+    }
 
-  namespace {
-    std::atomic<bool> filament_update_pending { false };
-  }
+    // Reset state on any I2C/CRC error to force a clean re-sync next cycle.
+    // This prevents stale state if the device was hot-plugged or wedged.
+    bool scd41_fail_and_retry(const millis_t now, const char *msg, const int code) {
+      scd41_started = false;
+      next_poll_ms = now + scd41_poll_interval_ms;
+
+      if (scd41_should_warn(now)) {
+        SERIAL_ECHO_START();
+        SERIAL_ECHOPGM(" SCD41: ");
+        SERIAL_ECHO(msg);
+        if (code >= 0) {
+          SERIAL_ECHOPGM("=");
+          SERIAL_ECHO(code);
+        }
+        SERIAL_EOL();
+      }
+      return false;
+    }
+
+  } // namespace
 
 #endif
 
@@ -110,161 +129,110 @@ void FilamentWidthSensor::init() {
 #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
 
 void FilamentWidthSensor::schedule_update() {
-  SERIAL_ECHO_START();
-  SERIAL_ECHOLNPGM(" filwidth schedule_update");
   filament_update_pending.store(true, std::memory_order_relaxed);
 }
 
 void FilamentWidthSensor::service_update() {
-  SERIAL_ECHO_START();
-  SERIAL_ECHOLNPGM(" filwidth service_update");
-  if (!filament_update_pending.exchange(false, std::memory_order_acq_rel)) {
-    SERIAL_ECHO_START();
-    SERIAL_ECHOLNPGM(" filwidth service_update skip-no-pending");
-    return;
-  }
-
-  if (!enabled) {
-    SERIAL_ECHO_START();
-    SERIAL_ECHOLNPGM(" filwidth service_update skip-disabled");
-    return;
-  }
+  if (!filament_update_pending.exchange(false, std::memory_order_acq_rel) || !enabled) return;
 
   update_from_sensor();
 }
 
 void FilamentWidthSensor::get_and_publish_scd41() {
-  SERIAL_ECHO_START();
-  SERIAL_ECHOLNPGM(" filwidth get_and_publish_scd41");
-
-  I2C_HandleTypeDef &hi2c = I2C_HANDLE_FOR(io_expander2);
-
-  const auto ready = i2c::IsDeviceReady(hi2c, uint16_t(sensor_address << 1), 1, sensor_timeout_ms);
-  if (ready != i2c::Result::ok) {
-    SERIAL_ECHO_START(); SERIAL_ECHOLNPAIR(" SCD41: not ready=", int(ready));
-    return;
-  }
-
-  // helper: Sensirion CRC8 (polynomial 0x31 init 0xFF)
-  auto sensirion_crc8 = [](const uint8_t *data, size_t len) {
-    uint8_t crc = 0xFF;
-    for (size_t i = 0; i < len; ++i) {
-      crc ^= data[i];
-      for (uint8_t b = 0; b < 8; ++b) {
-        crc = (crc & 0x80) ? uint8_t((crc << 1) ^ 0x31) : uint8_t(crc << 1);
-      }
-    }
-    return crc;
-  };
-
-  // Request a measurement read (SCD4x read command 0xEC05)
-  uint8_t cmd[2] = { 0xEC, 0x05 };
-  if (i2c::Transmit(hi2c, uint16_t(sensor_address << 1), cmd, 2, sensor_timeout_ms) != i2c::Result::ok) {
-    SERIAL_ECHO_START(); SERIAL_ECHOLNPGM(" SCD41: failed to send read command");
-    return;
-  }
-
-  // Read 9 bytes: CO2(2)+CRC, T(2)+CRC, RH(2)+CRC
-  uint8_t buf[9] = {0};
-  if (i2c::Receive(hi2c, uint16_t((sensor_address << 1) | 0x1), buf, sizeof(buf), sensor_timeout_ms) != i2c::Result::ok) {
-    SERIAL_ECHO_START(); SERIAL_ECHOLNPGM(" SCD41: read failed (i2c receive)");
-    return;
-  }
-
-  // Validate CRCs
-  for (int i = 0; i < 3; ++i) {
-    const uint8_t *w = &buf[i * 3];
-    if (sensirion_crc8(w, 2) != w[2]) {
-      SERIAL_ECHO_START(); SERIAL_ECHOLNPGM(" SCD41: CRC mismatch");
-      return;
-    }
-  }
-
-  uint16_t co2 = (uint16_t(buf[0]) << 8) | uint16_t(buf[1]);
-  uint16_t raw_t = (uint16_t(buf[3]) << 8) | uint16_t(buf[4]);
-  uint16_t raw_rh = (uint16_t(buf[6]) << 8) | uint16_t(buf[7]);
-
-  float temp_c = -45.0f + 175.0f * (float(raw_t) / 65536.0f);
-  float rh = 100.0f * (float(raw_rh) / 65536.0f);
-
-  SERIAL_ECHO_START(); SERIAL_ECHOLNPGM(" SCD41 measurement:");
-  SERIAL_ECHO_START(); SERIAL_ECHOLNPAIR("  co2_ppm=", int(co2));
-  SERIAL_ECHO_START(); SERIAL_ECHOLNPAIR("  temp_c=", temp_c);
-  SERIAL_ECHO_START(); SERIAL_ECHOLNPAIR("  rh_pct=", rh);
+  (void)update_from_sensor();
 }
 
 bool FilamentWidthSensor::update_from_sensor() {
-  SERIAL_ECHO_START();
-  SERIAL_ECHOLNPGM(" filwidth update_from_sensor");
-  uint8_t buffer[sensor_digits] = { 0 };
+  I2C_HandleTypeDef &hi2c = I2C_HANDLE_FOR(io_expander2);
+  const millis_t now = millis();
 
-  const auto ready = i2c::IsDeviceReady(hi2c2, sensor_address << 1, 1, sensor_timeout_ms);
-  if (ready != i2c::Result::ok) {
-    SERIAL_ECHO_START();
-    switch (ready) {
-      case i2c::Result::error:
-        SERIAL_ECHOLNPAIR(" filwidth device_not_ready=errorinecho", int(ready));
-        break;
-      case i2c::Result::busy_after_retries:
-        SERIAL_ECHOLNPGM(" filwidth device_not_ready=busy");
-        break;
-      case i2c::Result::timeout:
-        SERIAL_ECHOLNPGM(" filwidth device_not_ready=timeout");
-        break;
-      default:
-        SERIAL_ECHOLNPAIR(" filwidth device_not_ready=realerror", int(ready));
-        break;
+  if (!ELAPSED(now, next_poll_ms))
+    return false;
+
+  if (!scd41_started) {
+    i2c::Result init_result = i2c::Result::error;
+    bool device_ack_seen = false;
+
+    // Retry a few times to absorb transient bus arbitration failures on shared I2C2.
+    for (uint8_t attempt = 0; attempt < scd41_init_retries; ++attempt) {
+      init_result = i2c::IsDeviceReady(hi2c, uint16_t(sensor_address << 1), 1, sensor_i2c_timeout_ms);
+      if (init_result != i2c::Result::ok) continue;
+
+      device_ack_seen = true;
+      init_result = scd41_send_command(hi2c, scd41_cmd_start_periodic);
+      if (init_result == i2c::Result::ok) {
+        scd41_started = true;
+        next_poll_ms = now + scd41_first_sample_delay_ms;
+        return false;
+      }
+    }
+
+    next_poll_ms = now + scd41_poll_interval_ms;
+    if (scd41_should_warn(now)) {
+      SERIAL_ECHO_START();
+      if (device_ack_seen)
+        SERIAL_ECHOLNPAIR(" SCD41: start_periodic_failed=", int(init_result));
+      else
+        SERIAL_ECHOLNPAIR(" SCD41: device_not_ready=", int(init_result));
     }
     return false;
   }
 
-  const auto result = i2c::Receive(hi2c2, (sensor_address << 1) | 0x1, buffer, sensor_digits, sensor_timeout_ms);
-  if (result != i2c::Result::ok) {
-    SERIAL_ECHO_START();
-    switch (result) {
-      case i2c::Result::error:
-        SERIAL_ECHOLNPGM(" filwidth i2c failure=errorrrrrr");
-        break;
-      case i2c::Result::busy_after_retries:
-        SERIAL_ECHOLNPGM(" filwidth i2c failure=busy");
-        break;
-      case i2c::Result::timeout:
-        SERIAL_ECHOLNPGM(" filwidth i2c failure=timeout");
-        break;
-      default:
-        SERIAL_ECHOLNPAIR(" filwidth i2c failure=", int(result));
-        break;
-    }
+  // Command sequence: GetDataReadyStatus -> read 2B + CRC -> ReadMeasurement.
+  const auto ready_cmd_result = scd41_send_command(hi2c, scd41_cmd_get_data_ready);
+  if (ready_cmd_result != i2c::Result::ok)
+    return scd41_fail_and_retry(now, "data_ready_cmd_failed", int(ready_cmd_result));
+
+  uint8_t ready_buf[3] = { 0 };
+  const auto ready_read_result = i2c::Receive(hi2c, uint16_t((sensor_address << 1) | 0x1), ready_buf, sizeof(ready_buf), sensor_i2c_timeout_ms);
+  if (ready_read_result != i2c::Result::ok)
+    return scd41_fail_and_retry(now, "data_ready_read_failed", int(ready_read_result));
+
+  // Data-ready response is a single 16-bit word plus CRC.
+  if (sensirion_crc8(ready_buf, 2) != ready_buf[2])
+    return scd41_fail_and_retry(now, "data_ready_crc_mismatch", -1);
+
+  const uint16_t ready_word = (uint16_t(ready_buf[0]) << 8) | uint16_t(ready_buf[1]);
+  if ((ready_word & 0x07FFU) == 0) {
+    next_poll_ms = now + scd41_poll_interval_ms;
     return false;
   }
 
-  SERIAL_ECHO_START();
-  SERIAL_ECHOLNPGM(" filwidth i2c ok");
+  const auto read_cmd_result = scd41_send_command(hi2c, scd41_cmd_read_measurement);
+  if (read_cmd_result != i2c::Result::ok)
+    return scd41_fail_and_retry(now, "read_cmd_failed", int(read_cmd_result));
 
-  SERIAL_ECHO_START();
-  SERIAL_ECHOPGM(" filwidth raw:");
-  for (uint8_t i = 0; i < sensor_digits; ++i) {
-    SERIAL_ECHOPGM(" ");
-    SERIAL_ECHO(int(buffer[i]));
+  uint8_t buf[9] = { 0 };
+  const auto read_result = i2c::Receive(hi2c, uint16_t((sensor_address << 1) | 0x1), buf, sizeof(buf), sensor_i2c_timeout_ms);
+  if (read_result != i2c::Result::ok)
+    return scd41_fail_and_retry(now, "read_failed", int(read_result));
+
+  // Each 16-bit word (CO2, temp, RH) is followed by its own CRC byte.
+  for (uint8_t i = 0; i < 3; ++i) {
+    const uint8_t *word = &buf[i * 3];
+    if (sensirion_crc8(word, 2) != word[2])
+      return scd41_fail_and_retry(now, "measurement_crc_mismatch", -1);
   }
-  SERIAL_ECHOPGM(" ascii:'");
-  for (uint8_t i = 0; i < sensor_digits; ++i)
-    SERIAL_CHAR((buffer[i] >= 32 && buffer[i] <= 126) ? buffer[i] : '.');
-  SERIAL_CHAR('\'');
-  SERIAL_EOL();
 
-  float measured_value = measured_mm;
-  if (!decode_sensor_digits(buffer, sensor_digits, measured_value)) {
+  const uint16_t co2_ppm = (uint16_t(buf[0]) << 8) | uint16_t(buf[1]);
+  const uint16_t raw_t = (uint16_t(buf[3]) << 8) | uint16_t(buf[4]);
+  const uint16_t raw_rh = (uint16_t(buf[6]) << 8) | uint16_t(buf[7]);
+
+  const float temp_c = -45.0f + 175.0f * (float(raw_t) / 65536.0f);
+  const float rh_pct = 100.0f * (float(raw_rh) / 65536.0f);
+
+  if (ELAPSED(now, last_print_ms + scd41_print_interval_ms)) {
     SERIAL_ECHO_START();
-    SERIAL_ECHOLNPGM(" filwidth decode failed");
-    return false;
+    SERIAL_ECHOPGM(" SCD41 co2_ppm=");
+    SERIAL_ECHO(int(co2_ppm));
+    SERIAL_ECHOPGM(" temp_c=");
+    SERIAL_ECHO(temp_c);
+    SERIAL_ECHOPGM(" rh_pct=");
+    SERIAL_ECHOLN(rh_pct);
+    last_print_ms = now;
   }
 
-  SERIAL_ECHO_START();
-  SERIAL_ECHOLNPGM(" filwidth decode ok");
-  SERIAL_ECHO_START();
-  SERIAL_ECHOLNPAIR(" filwidth decoded=", measured_value);
-  measured_mm = measured_value;
+  next_poll_ms = now + scd41_poll_interval_ms;
   return true;
 }
 

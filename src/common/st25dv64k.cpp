@@ -20,10 +20,43 @@ constexpr const uint8_t BLOCK_DELAY = 5; // block delay [ms]
 constexpr const uint8_t BLOCK_BYTES = 4; // bytes per block
 
 constexpr const uint32_t RETRIES = 3;
+constexpr const uint32_t EEPROM_I2C_TIMEOUT_MS = 25;
+constexpr const uint32_t EEPROM_RECOVERY_DELAY_MS = 2;
+
+enum class St25Op : uint8_t {
+    unknown,
+    user_read_bytes,
+    user_write_bytes,
+    user_unverified_write_bytes,
+    read_cfg,
+    write_cfg,
+    present_pwd,
+};
 
 #define DELAY HAL_Delay
 
 uint8_t st25dv64k_initialised = 0;
+St25Op st25_last_operation = St25Op::unknown;
+
+const char *st25_op_name(St25Op op) {
+    switch (op) {
+    case St25Op::unknown:
+        return "unknown";
+    case St25Op::user_read_bytes:
+        return "user_read_bytes";
+    case St25Op::user_write_bytes:
+        return "user_write_bytes";
+    case St25Op::user_unverified_write_bytes:
+        return "user_unverified_write_bytes";
+    case St25Op::read_cfg:
+        return "read_cfg";
+    case St25Op::write_cfg:
+        return "write_cfg";
+    case St25Op::present_pwd:
+        return "present_pwd";
+    }
+    return "invalid";
+}
 
 #ifdef ST25DV64K_RTOS
 
@@ -58,13 +91,13 @@ void rise_error_if_needed(i2c::Result result) {
     case i2c::Result::ok:
         break;
     case i2c::Result::busy_after_retries:
-        fatal_error(ErrCode::ERR_ELECTRO_I2C_TX_BUSY);
+        bsod("ST25 I2C busy op=%s", st25_op_name(st25_last_operation));
         break;
     case i2c::Result::error:
-        fatal_error(ErrCode::ERR_ELECTRO_I2C_TX_ERROR);
+        bsod("ST25 I2C error op=%s", st25_op_name(st25_last_operation));
         break;
     case i2c::Result::timeout:
-        fatal_error(ErrCode::ERR_ELECTRO_I2C_TX_TIMEOUT);
+        bsod("ST25 I2C timeout op=%s", st25_op_name(st25_last_operation));
         break;
     }
 }
@@ -73,16 +106,17 @@ void try_fix_if_needed(const i2c::Result &result) {
     switch (result) {
     case i2c::Result::busy_after_retries:
     case i2c::Result::error:
-        I2C_INIT(eeprom);
-        [[fallthrough]];
     case i2c::Result::timeout:
+        I2C_INIT(eeprom);
+        HAL_Delay(EEPROM_RECOVERY_DELAY_MS);
+        [[fallthrough]];
     case i2c::Result::ok:
         break;
     }
 }
 
 [[nodiscard]] i2c::Result eeprom_transmit(EepromCommandWrite cmd, uint8_t *pData, uint16_t size) {
-    return i2c::Transmit(I2C_HANDLE_FOR(eeprom), ftrstd::to_underlying(cmd), pData, size, HAL_MAX_DELAY);
+    return i2c::Transmit(I2C_HANDLE_FOR(eeprom), ftrstd::to_underlying(cmd), pData, size, EEPROM_I2C_TIMEOUT_MS);
 }
 
 [[nodiscard]] i2c::Result user_write_address_without_lock(EepromCommandWrite cmd, uint16_t address) {
@@ -133,7 +167,7 @@ void try_fix_if_needed(const i2c::Result &result) {
 
     i2c::Result result = user_write_address_without_lock(eeprom_get_write_address(cmd), address);
     if (result == i2c::Result::ok) {
-        result = i2c::Receive(I2C_HANDLE_FOR(eeprom), ftrstd::to_underlying(eeprom_get_read_address(cmd)), static_cast<uint8_t *>(pdata), size, HAL_MAX_DELAY);
+        result = i2c::Receive(I2C_HANDLE_FOR(eeprom), ftrstd::to_underlying(eeprom_get_read_address(cmd)), static_cast<uint8_t *>(pdata), size, EEPROM_I2C_TIMEOUT_MS);
     }
 
     return result;
@@ -223,6 +257,7 @@ void try_fix_if_needed(const i2c::Result &result) {
 }
 
 void st25dv64k_user_read_bytes(uint16_t address, void *pdata, uint16_t size) {
+    st25_last_operation = St25Op::user_read_bytes;
     auto result = user_read_bytes(EepromCommand::memory, address, pdata, size);
     rise_error_if_needed(result);
 }
@@ -234,11 +269,13 @@ uint8_t st25dv64k_user_read(uint16_t address) {
 }
 
 void st25dv64k_user_write_bytes(uint16_t address, const void *pdata, uint16_t size) {
+    st25_last_operation = St25Op::user_write_bytes;
     auto result = user_write_bytes(EepromCommand::memory, address, pdata, size);
     rise_error_if_needed(result);
 }
 
 void st25dv64k_user_unverified_write_bytes(uint16_t address, const void *pdata, uint16_t size) {
+    st25_last_operation = St25Op::user_unverified_write_bytes;
     auto result = user_unverified_write_bytes(address, pdata, size);
     rise_error_if_needed(result);
 }
@@ -249,17 +286,20 @@ void st25dv64k_user_write(uint16_t address, uint8_t data) {
 
 uint8_t st25dv64k_rd_cfg(uint16_t address) {
     uint8_t data;
+    st25_last_operation = St25Op::read_cfg;
     auto result = user_read_bytes(EepromCommand::registers, address, &data, sizeof(data));
     rise_error_if_needed(result);
     return data;
 }
 
 void st25dv64k_wr_cfg(uint16_t address, uint8_t data) {
+    st25_last_operation = St25Op::write_cfg;
     auto result = user_write_bytes(EepromCommand::registers, address, &data, sizeof(data));
     rise_error_if_needed(result);
 }
 
 void st25dv64k_present_pwd(uint8_t *pwd) {
+    st25_last_operation = St25Op::present_pwd;
     uint8_t _out[19] = { 0x09, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x09, 0, 0, 0, 0, 0, 0, 0, 0 };
     if (pwd) {
         memcpy(_out + 2, pwd, 8);

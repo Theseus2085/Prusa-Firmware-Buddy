@@ -11,6 +11,7 @@
 #include "timer_defaults.h"
 #include "PCA9557.hpp"
 #include "TCA6408A.hpp"
+#include "bsod.h"
 #include <logging/log.hpp>
 #include "timing_precise.hpp"
 #include <option/has_burst_stepping.h>
@@ -475,7 +476,7 @@ static void i2c_free_bus_in_case_of_slave_deadlock(uint32_t clk, hw_pin sda, hw_
     set_pin_od(sda); // reconfigure SDA to open-drain, to be able to move it
     HAL_GPIO_WritePin(sda.port, sda.no, GPIO_PIN_RESET); // set SDA to '0' while SCL == '1' - start condition
     delay_us_precise(i2c_get_edge_us(clk)); // wait half period
-    HAL_GPIO_WritePin(sda.port, sda.no, GPIO_PIN_RESET); // set SDA to '1' while SCL == '1' - stop condition
+    HAL_GPIO_WritePin(sda.port, sda.no, GPIO_PIN_SET); // set SDA to '1' while SCL == '1' - stop condition
     delay_us_precise(i2c_get_edge_us(clk)); // wait half period
 }
 
@@ -532,14 +533,27 @@ void hw_i2c1_init() {
 
 #if HAS_I2CN(2)
 
-// speed must be 400k, to speedup PersistentStorage erase (mk3.9/4 switch)
+// speed must be 400k, maybe, for reasons lost in time
 static constexpr uint32_t i2c2_speed = 400'000;
+static constexpr uint32_t i2c2_bus_idle_timeout_ms = 20;
+
+static void i2c2_assert_bus_idle_or_bsod(const char *stage) {
+    const uint32_t start_ms = HAL_GetTick();
+    while (HAL_GPIO_ReadPin(i2c2_SDA_PORT, i2c2_SDA_PIN) == GPIO_PIN_RESET || HAL_GPIO_ReadPin(i2c2_SCL_PORT, i2c2_SCL_PIN) == GPIO_PIN_RESET) {
+        if ((HAL_GetTick() - start_ms) > i2c2_bus_idle_timeout_ms) {
+            const int sda = HAL_GPIO_ReadPin(i2c2_SDA_PORT, i2c2_SDA_PIN) == GPIO_PIN_SET ? 1 : 0;
+            const int scl = HAL_GPIO_ReadPin(i2c2_SCL_PORT, i2c2_SCL_PIN) == GPIO_PIN_SET ? 1 : 0;
+            bsod("I2C2 %s sda=%d scl=%d", stage, sda, scl);
+        }
+    }
+}
 
 void hw_i2c2_pins_init() {
     GPIO_InitTypeDef GPIO_InitStruct {};
 
     __HAL_RCC_GPIOF_CLK_ENABLE();
 
+    i2c2_assert_bus_idle_or_bsod("pre_gpio");
     i2c_free_bus_in_case_of_slave_deadlock(i2c2_speed, { i2c2_SDA_PORT, i2c2_SDA_PIN }, { i2c2_SCL_PORT, i2c2_SCL_PIN });
 
     // GPIO I2C mode
@@ -549,6 +563,7 @@ void hw_i2c2_pins_init() {
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
     HAL_GPIO_Init(i2c2_SDA_PORT, &GPIO_InitStruct);
+    i2c2_assert_bus_idle_or_bsod("post_gpio");
 
     // Peripheral clock enable
     __HAL_RCC_I2C2_CLK_ENABLE();
@@ -565,8 +580,11 @@ void hw_i2c2_init() {
     hi2c2.Init.OwnAddress2 = 0;
     hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
     hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    i2c2_assert_bus_idle_or_bsod("pre_init");
     if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
-        Error_Handler();
+        const int sda = HAL_GPIO_ReadPin(i2c2_SDA_PORT, i2c2_SDA_PIN) == GPIO_PIN_SET ? 1 : 0;
+        const int scl = HAL_GPIO_ReadPin(i2c2_SCL_PORT, i2c2_SCL_PIN) == GPIO_PIN_SET ? 1 : 0;
+        bsod("I2C2 init_fail sda=%d scl=%d", sda, scl);
     }
 
     #if defined(I2C_FLTR_ANOFF) && defined(I2C_FLTR_DNF)

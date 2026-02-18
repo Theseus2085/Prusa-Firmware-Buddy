@@ -101,6 +101,7 @@ void GcodeSuite::M261() {
   const uint8_t bytes = parser.byteval('B', 1),   // Bytes to request
                 style = parser.byteval('S');      // Serial output style (ASCII, HEX etc)
 
+  // M261 requires a valid target address (set via A) and a non-zero byte count (B).
   if (twibus.addr && bytes && bytes <= TWIBUS_BUFFER_SIZE)
     twibus.relay(bytes, style);
   else
