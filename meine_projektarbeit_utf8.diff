@@ -1,0 +1,776 @@
+﻿diff --git a/include/marlin/Configuration_MK4_adv.h b/include/marlin/Configuration_MK4_adv.h
+index 1151d6a19..a90ad71d4 100644
+--- a/include/marlin/Configuration_MK4_adv.h
++++ b/include/marlin/Configuration_MK4_adv.h
+@@ -2110,14 +2110,20 @@
+  *
+  * Note: May require analog pins to be defined for other boards.
+  */
+-//#define FILAMENT_WIDTH_SENSOR
++#define FILAMENT_WIDTH_SENSOR
+
+ #if ENABLED(FILAMENT_WIDTH_SENSOR)
+     #define FILAMENT_SENSOR_EXTRUDER_NUM 0 // Index of the extruder that has the filament sensor. :[0,1,2,3,4]
+-    #define MEASUREMENT_DELAY_CM 14 // (cm) The distance from the filament sensor to the melting chamber
++    #define MEASUREMENT_DELAY_CM 5 // (cm) The distance from the filament sensor to the melting chamber
+
+-    #define FILWIDTH_ERROR_MARGIN 1.0 // (mm) If a measurement differs too much from nominal width ignore it
+-    #define MAX_MEASUREMENT_DELAY 20 // (bytes) Buffer size for stored measurements (1 byte per cm). Must be larger than MEASUREMENT_DELAY_CM.
++    #define FILWIDTH_SENSOR_USE_I2C
++    #define FILWIDTH_SENSOR_SPACING_MM 30.0f
++    #define FILWIDTH_SENSOR_I2C_ADDRESS 0x42 // 7-bit address of the external filament width sensor
++    #define FILWIDTH_SENSOR_TIMEOUT_MS 5 // Timeout for I2C transactions with the filament sensor
++    #define FILWIDTH_SENSOR_DIGITS 5 // Number of digits provided by the filament width sensor (first digit is the millimeter)
++
++    #define FILWIDTH_ERROR_MARGIN 5.0 // (mm) If a measurement differs too much from nominal width ignore it
++    #define MAX_MEASUREMENT_DELAY 8 // (bytes) Buffer size for stored measurements (1 byte per cm). Must be larger than MEASUREMENT_DELAY_CM.
+
+     #define DEFAULT_MEASURED_FILAMENT_DIA DEFAULT_NOMINAL_FILAMENT_DIA // Set measured to nominal initially
+
+diff --git a/lib/AddMarlin.cmake b/lib/AddMarlin.cmake
+index 75b24601b..e20f1d999 100644
+--- a/lib/AddMarlin.cmake
++++ b/lib/AddMarlin.cmake
+@@ -47,6 +47,7 @@ if(BOARD_IS_MASTER_BOARD)
+             Marlin/Marlin/src/feature/bedlevel/ubl/ubl_motion.cpp
+             Marlin/Marlin/src/feature/binary_protocol.cpp
+             Marlin/Marlin/src/feature/cancel_object.cpp
++            Marlin/Marlin/src/feature/filwidth.cpp
+             Marlin/Marlin/src/feature/host_actions.cpp
+             Marlin/Marlin/src/feature/input_shaper/input_shaper.cpp
+             Marlin/Marlin/src/feature/input_shaper/input_shaper_config.cpp
+@@ -99,6 +100,7 @@ if(BOARD_IS_MASTER_BOARD)
+             Marlin/Marlin/src/gcode/control/M999.cpp
+             Marlin/Marlin/src/gcode/eeprom/M500-M504.cpp
+             Marlin/Marlin/src/gcode/feature/advance/M900.cpp
++            Marlin/Marlin/src/gcode/feature/filwidth/M404-M407.cpp
+             Marlin/Marlin/src/gcode/feature/i2c/M260_M261.cpp
+             Marlin/Marlin/src/gcode/feature/input_shaper/M593.cpp
+             Marlin/Marlin/src/gcode/feature/input_shaper/M74.cpp
+diff --git a/lib/Marlin/Marlin/src/feature/filwidth.cpp b/lib/Marlin/Marlin/src/feature/filwidth.cpp
+index fb685bddc..77562d73c 100644
+--- a/lib/Marlin/Marlin/src/feature/filwidth.cpp
++++ b/lib/Marlin/Marlin/src/feature/filwidth.cpp
+@@ -26,24 +26,286 @@
+
+ #include "filwidth.h"
+
++#include <cmath>
++#include <algorithm>
++
++#include <atomic>
++#include "i2c.hpp"
++#include "../core/serial.h"
++
+ FilamentWidthSensor filwidth;
+
+-bool FilamentWidthSensor::enabled; // = false;                          // (M405-M406) Filament Width Sensor ON/OFF.
+-uint32_t FilamentWidthSensor::accum; // = 0                             // ADC accumulator
+-uint16_t FilamentWidthSensor::raw; // = 0                               // Measured filament diameter - one extruder only
+-float FilamentWidthSensor::nominal_mm = DEFAULT_NOMINAL_FILAMENT_DIA,   // (M104) Nominal filament width
+-      FilamentWidthSensor::measured_mm = DEFAULT_MEASURED_FILAMENT_DIA, // Measured filament diameter
+-      FilamentWidthSensor::e_count = 0,
+-      FilamentWidthSensor::delay_dist = 0;
+-uint8_t FilamentWidthSensor::meas_delay_cm = MEASUREMENT_DELAY_CM;      // Distance delay setting
+-int8_t FilamentWidthSensor::ratios[MAX_MEASUREMENT_DELAY + 1],          // Ring buffer to delay measurement. (Extruder factor minus 100)
+-       FilamentWidthSensor::index_r,                                    // Indexes into ring buffer
+-       FilamentWidthSensor::index_w;
++bool   FilamentWidthSensor::enabled         = true;
++float  FilamentWidthSensor::nominal_mm      = DEFAULT_NOMINAL_FILAMENT_DIA;
++float  FilamentWidthSensor::measured_mm     = DEFAULT_MEASURED_FILAMENT_DIA;
++float  FilamentWidthSensor::nominal_area    = 0.0f;
++float  FilamentWidthSensor::e_count         = 0.0f;
++float  FilamentWidthSensor::delay_dist      = 0.0f;
++uint8_t FilamentWidthSensor::meas_delay_cm  = MEASUREMENT_DELAY_CM;
++float  FilamentWidthSensor::ratios[MMD_CM]  = { 0.0f };
++int8_t FilamentWidthSensor::index_r         = 0;
++int8_t FilamentWidthSensor::index_w         = 0;
++
++float  FilamentWidthSensor::sensor_queue[sensor_count][FILWIDTH_SENSOR_QUEUE_CAPACITY]      = { { 0 } };
++float  FilamentWidthSensor::sensor_targets_mm[sensor_count][FILWIDTH_SENSOR_QUEUE_CAPACITY] = { { 0 } };
++uint8_t FilamentWidthSensor::sensor_head[sensor_count] = { 0 };
++uint8_t FilamentWidthSensor::sensor_size[sensor_count] = { 0 };
++float  FilamentWidthSensor::sensor_offsets_mm[sensor_count] = {
++  FILWIDTH_SENSOR1_OFFSET_MM,
++  FILWIDTH_SENSOR2_OFFSET_MM
++};
++float  FilamentWidthSensor::filament_position_mm = 0.0f;
++float  FilamentWidthSensor::latest_axes_mm[sensor_count] = {
++  DEFAULT_NOMINAL_FILAMENT_DIA,
++  DEFAULT_NOMINAL_FILAMENT_DIA
++};
++
++namespace {
++  constexpr uint8_t sensor_axes              = 2;
++  constexpr uint8_t sensor_digits_per_axis   = 5;
++  constexpr uint8_t sensor_payload_bytes     = sensor_axes * sensor_digits_per_axis;
++  constexpr uint8_t sensor_address           = FILWIDTH_SENSOR_I2C_ADDRESS;
++  constexpr uint32_t sensor_i2c_timeout_ms   = 5;
++  constexpr uint8_t sensor_ready_retries     = 3;
++  constexpr millis_t sensor_poll_interval_ms = 250UL;
++  constexpr millis_t sensor_warn_interval_ms = 3000UL;
++
++  bool decode_axis_digits(const uint8_t *buffer, const uint8_t length, float &out_mm) {
++    if (!buffer || length == 0) return false;
++
++    uint8_t digits_collected = 0;
++    uint8_t digits[sensor_digits_per_axis] = { 0 };
++
++    for (uint8_t i = 0; i < length && digits_collected < sensor_digits_per_axis; ++i) {
++      const uint8_t value = buffer[i];
++      if (value == '\n' || value == '\r' || value == ' ') continue;
++      if (value == '.') continue;
++
++      uint8_t digit;
++      if (value <= 9) digit = value;
++      else if (value >= '0' && value <= '9') digit = value - '0';
++      else return false;
++
++      digits[digits_collected++] = digit;
++    }
++
++    if (digits_collected != sensor_digits_per_axis)
++      return false;
++
++    float result = digits[0];
++    float scale = 0.1f;
++    for (uint8_t i = 1; i < sensor_digits_per_axis; ++i, scale *= 0.1f)
++      result += digits[i] * scale;
++
++    if (!WITHIN(result, 0.5f, 3.5f))
++      return false;
++
++    out_mm = result;
++    return true;
++  }
++
++  bool decode_sensor_payload(const uint8_t *buffer, const uint8_t length, float (&axes_mm)[sensor_axes]) {
++    if (!buffer || length < sensor_payload_bytes) return false;
++    for (uint8_t axis = 0; axis < sensor_axes; ++axis) {
++      const uint8_t *axis_ptr = buffer + (axis * sensor_digits_per_axis);
++      if (!decode_axis_digits(axis_ptr, sensor_digits_per_axis, axes_mm[axis]))
++        return false;
++    }
++    return true;
++  }
++
++  std::atomic<bool> filament_update_pending { false };
++  millis_t next_poll_ms = 0;
++  millis_t next_warn_ms = 0;
++
++  bool should_warn(const millis_t now) {
++    if (!ELAPSED(now, next_warn_ms)) return false;
++    next_warn_ms = now + sensor_warn_interval_ms;
++    return true;
++  }
++
++  bool fail_and_reschedule(const millis_t now, const char *msg, const int code) {
++    next_poll_ms = now + sensor_poll_interval_ms;
++    if (should_warn(now)) {
++      SERIAL_ECHO_START();
++      SERIAL_ECHOPGM(" FilWidth I2C: ");
++      SERIAL_ECHO(msg);
++      if (code >= 0) {
++        SERIAL_ECHOPGM("=");
++        SERIAL_ECHO(code);
++      }
++      SERIAL_EOL();
++    }
++    return false;
++  }
++
++  i2c::Result wait_device_ready(I2C_HandleTypeDef &i2c_handle) {
++    i2c::Result ready_result = i2c::Result::error;
++    for (uint8_t attempt = 0; attempt < sensor_ready_retries; ++attempt) {
++      ready_result = i2c::IsDeviceReady(i2c_handle, uint16_t(sensor_address << 1), 1, sensor_i2c_timeout_ms);
++      if (ready_result == i2c::Result::ok) break;
++    }
++    return ready_result;
++  }
++}
+
+ void FilamentWidthSensor::init() {
+-  const int8_t ratio = sample_to_size_ratio();
+-  for (uint8_t i = 0; i < COUNT(ratios); ++i) ratios[i] = ratio;
++  refresh_nominal_area();
++  measured_mm = nominal_mm;
++  e_count = 0.0f;
++  delay_dist = 0.0f;
+   index_r = index_w = 0;
++
++  const float ratio = sample_to_size_ratio();
++  for (uint8_t i = 0; i < COUNT(ratios); ++i) ratios[i] = ratio;
++
++  filament_position_mm = 0.0f;
++  for (uint8_t axis = 0; axis < sensor_count; ++axis) {
++    sensor_head[axis] = 0;
++    sensor_size[axis] = 0;
++    latest_axes_mm[axis] = nominal_mm;
++    for (uint8_t slot = 0; slot < FILWIDTH_SENSOR_QUEUE_CAPACITY; ++slot) {
++      sensor_queue[axis][slot] = nominal_mm;
++      sensor_targets_mm[axis][slot] = 0.0f;
++    }
++  }
++
++  reset_poll_state();
++}
++
++void FilamentWidthSensor::reset_poll_state() {
++  next_poll_ms = 0;
++  next_warn_ms = 0;
++}
++
++float FilamentWidthSensor::sample_to_size_ratio() {
++  const float axis_a = std::max(latest_axes_mm[0], 0.01f);
++  const float axis_b = std::max(latest_axes_mm[1], 0.01f);
++  const float area = get_area_mm2(axis_a, axis_b);
++  if (nominal_area <= 0.0f) return 0.0f;
++  return (area / nominal_area) * 100.0f - 100.0f;
++}
++
++void FilamentWidthSensor::schedule_update() {
++  filament_update_pending.store(true, std::memory_order_release);
++}
++
++void FilamentWidthSensor::service_update() {
++  if (!filament_update_pending.exchange(false, std::memory_order_acq_rel) || !enabled) return;
++
++  const millis_t now = millis();
++  if (PENDING(now, next_poll_ms)) return;
++
++  (void)update_from_sensor();
++}
++
++bool FilamentWidthSensor::update_from_sensor() {
++  const millis_t now = millis();
++  if (PENDING(now, next_poll_ms)) return false;
++
++  I2C_HandleTypeDef &i2c_handle = I2C_HANDLE_FOR(io_expander2);
++  const auto ready_result = wait_device_ready(i2c_handle);
++  if (ready_result != i2c::Result::ok)
++    return fail_and_reschedule(now, "device_not_ready", int(ready_result));
++
++  uint8_t buffer[sensor_payload_bytes] = { 0 };
++  const auto result = i2c::Receive(
++    i2c_handle,
++    uint16_t((sensor_address << 1) | 0x1),
++    buffer,
++    sensor_payload_bytes,
++    sensor_i2c_timeout_ms
++  );
++
++  if (result != i2c::Result::ok)
++    return fail_and_reschedule(now, "read_failed", int(result));
++
++  float axes_mm[sensor_axes] = { latest_axes_mm[0], latest_axes_mm[1] };
++  if (!decode_sensor_payload(buffer, sensor_payload_bytes, axes_mm))
++    return fail_and_reschedule(now, "decode_failed", -1);
++
++  enqueue_sensor_sample(0, axes_mm[0]);
++  enqueue_sensor_sample(1, axes_mm[1]);
++  process_ready_samples();
++
++  next_poll_ms = now + sensor_poll_interval_ms;
++  return true;
++}
++
++void FilamentWidthSensor::enqueue_sensor_sample(const uint8_t sensor_index, const float diameter_mm) {
++  if (sensor_index >= sensor_count) return;
++
++  const uint8_t capacity = FILWIDTH_SENSOR_QUEUE_CAPACITY;
++  const uint8_t tail = (sensor_head[sensor_index] + sensor_size[sensor_index]) % capacity;
++
++  sensor_queue[sensor_index][tail] = diameter_mm;
++  sensor_targets_mm[sensor_index][tail] = filament_position_mm + sensor_offsets_mm[sensor_index];
++
++  if (sensor_size[sensor_index] < capacity) {
++    ++sensor_size[sensor_index];
++  }
++  else {
++    sensor_head[sensor_index] = (sensor_head[sensor_index] + 1) % capacity;
++  }
++}
++
++bool FilamentWidthSensor::try_pop_aligned_sample(float &axis_a_mm, float &axis_b_mm) {
++  if (!sensor_size[0] || !sensor_size[1]) return false;
++
++  const uint8_t head_a = sensor_head[0];
++  const uint8_t head_b = sensor_head[1];
++
++  if (filament_position_mm < sensor_targets_mm[0][head_a]) return false;
++  if (filament_position_mm < sensor_targets_mm[1][head_b]) return false;
++
++  axis_a_mm = sensor_queue[0][head_a];
++  axis_b_mm = sensor_queue[1][head_b];
++
++  sensor_head[0] = (head_a + 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY;
++  sensor_head[1] = (head_b + 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY;
++  --sensor_size[0];
++  --sensor_size[1];
++  return true;
++}
++
++void FilamentWidthSensor::process_ready_samples() {
++  float axis_a = latest_axes_mm[0];
++  float axis_b = latest_axes_mm[1];
++  while (try_pop_aligned_sample(axis_a, axis_b)) {
++    latest_axes_mm[0] = axis_a;
++    latest_axes_mm[1] = axis_b;
++    measured_mm = compute_equivalent_diameter(axis_a, axis_b);
++  }
++}
++
++float FilamentWidthSensor::compute_equivalent_diameter(const float axis_a_mm, const float axis_b_mm) {
++  const float safe_product = std::max(axis_a_mm * axis_b_mm, 0.0001f);
++  return sqrtf(safe_product);
++}
++
++void FilamentWidthSensor::advance_e(const float &e_move) {
++#if ENABLED(FILWIDTH_SENSOR_USE_I2C)
++  filament_position_mm += e_move;
++  process_ready_samples();
++#endif
++
++  e_count += e_move;
++  delay_dist += e_move;
++
++  if (!UNEAR_ZERO(e_count)) {
++    while (delay_dist >= MMD_MM) delay_dist -= MMD_MM;
++
++    index_r = int8_t(delay_dist * 0.1f);
++
++    if (index_r != index_w) {
++      e_count = 0;
++      const float meas_sample = sample_to_size_ratio();
++      do {
++        if (++index_w >= MMD_CM) index_w = 0;
++        ratios[index_w] = meas_sample;
++      } while (index_r != index_w);
++    }
++  }
+ }
+
+ #endif // FILAMENT_WIDTH_SENSOR
+diff --git a/lib/Marlin/Marlin/src/feature/filwidth.h b/lib/Marlin/Marlin/src/feature/filwidth.h
+index 74671b295..f68be7540 100644
+--- a/lib/Marlin/Marlin/src/feature/filwidth.h
++++ b/lib/Marlin/Marlin/src/feature/filwidth.h
+@@ -24,87 +24,75 @@
+ #include "../inc/MarlinConfig.h"
+ #include "../module/planner.h"
+
++#if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
++  #error "FILAMENT_WIDTH_SENSOR now requires FILWIDTH_SENSOR_USE_I2C"
++#endif
++
++#if ENABLED(FILWIDTH_SENSOR_USE_I2C)
++  #ifndef FILWIDTH_SENSOR_QUEUE_CAPACITY
++    #define FILWIDTH_SENSOR_QUEUE_CAPACITY (MAX_MEASUREMENT_DELAY + 1)
++  #endif
++  #ifndef FILWIDTH_SENSOR_VALUE_SCALE
++    #define FILWIDTH_SENSOR_VALUE_SCALE 0.01f
++  #endif
++  #ifndef FILWIDTH_SENSOR1_OFFSET_MM
++    #define FILWIDTH_SENSOR1_OFFSET_MM (MEASUREMENT_DELAY_CM * 10.0f)
++  #endif
++  #ifndef FILWIDTH_SENSOR_SPACING_MM
++    #define FILWIDTH_SENSOR_SPACING_MM 1.0f
++  #endif
++  #ifndef FILWIDTH_SENSOR2_OFFSET_MM
++    #define FILWIDTH_SENSOR2_OFFSET_MM (FILWIDTH_SENSOR1_OFFSET_MM + FILWIDTH_SENSOR_SPACING_MM)
++  #endif
++#endif
++
+ class FilamentWidthSensor {
+ public:
+-  static constexpr int MMD_CM = MAX_MEASUREMENT_DELAY + 1, MMD_MM = MMD_CM * 10;
++  static constexpr int MMD_CM = MAX_MEASUREMENT_DELAY + 1;
++  static constexpr int MMD_MM = MMD_CM * 10;
++
+   static bool enabled;              // (M405-M406) Filament Width Sensor ON/OFF.
+-  static uint32_t accum;            // ADC accumulator
+-  static uint16_t raw;              // Measured filament diameter - one extruder only
+-  static float nominal_mm,          // (M104) Nominal filament width
+-               measured_mm,         // Measured filament diameter
+-               e_count, delay_dist;
++  static float nominal_mm;          // (M104) Nominal filament width
++  static float measured_mm;         // Measured filament diameter (equivalent diameter for ellipse)
++  static float nominal_area;        // Reference ellipse area for nominal filament
++  static float e_count;             // Extruder movement accumulator
++  static float delay_dist;          // Running distance through the delay buffer
+   static uint8_t meas_delay_cm;     // Distance delay setting
+-  static int8_t ratios[MMD_CM],     // Ring buffer to delay measurement. (Extruder factor minus 100)
+-                index_r, index_w;   // Indexes into ring buffer
++  static float ratios[MMD_CM];      // Ring buffer to delay measurement. (Extruder factor minus 100)
++  static int8_t index_r;            // Index into ring buffer for reading
++  static int8_t index_w;            // Index into ring buffer for writing
++
++  static constexpr uint8_t sensor_count = 2;
++
++  // Two-dimensional circular queues keep each axis aligned to the E position where it reaches the nozzle.
++  static float sensor_queue[sensor_count][FILWIDTH_SENSOR_QUEUE_CAPACITY];
++  static float sensor_targets_mm[sensor_count][FILWIDTH_SENSOR_QUEUE_CAPACITY];
++  static uint8_t sensor_head[sensor_count];
++  static uint8_t sensor_size[sensor_count];
++  static float sensor_offsets_mm[sensor_count];
++  static float filament_position_mm;
++  static float latest_axes_mm[sensor_count];
++
++  static void enqueue_sensor_sample(uint8_t sensor_index, float diameter_mm);
++  static bool try_pop_aligned_sample(float &axis_a_mm, float &axis_b_mm);
++  static void process_ready_samples();
++  static float compute_equivalent_diameter(float axis_a_mm, float axis_b_mm);
+
+   FilamentWidthSensor() { init(); }
+-  static void init();
+-
+-  static inline void enable(const bool ena) { enabled = ena; }
+-
+-  static inline void set_delay_cm(const uint8_t cm) {
+-    meas_delay_cm = _MIN(cm, MAX_MEASUREMENT_DELAY);
+-  }
+-
+-  /**
+-   * Convert Filament Width (mm) to an extrusion ratio
+-   * and reduce to an 8 bit value.
+-   *
+-   * A nominal width of 1.75 and measured width of 1.73
+-   * gives (100 * 1.75 / 1.73) for a ratio of 101 and
+-   * a return value of 1.
+-   */
+-  static int8_t sample_to_size_ratio() {
+-    return ABS(nominal_mm - measured_mm) <= FILWIDTH_ERROR_MARGIN
+-           ? int(100.0f * nominal_mm / measured_mm) - 100 : 0;
+-  }
+
+-  // Apply a single ADC reading to the raw value
+-  static void accumulate(const uint16_t adc) {
+-    if (adc > 102)  // Ignore ADC under 0.5 volts
+-      accum += (uint32_t(adc) << 7) - (accum >> 7);
++  static void init();
++  static inline void enable(const bool ena) {
++    if (ena && !enabled) reset_poll_state();
++    enabled = ena;
+   }
++  static inline void set_delay_cm(const uint8_t cm) { meas_delay_cm = _MIN(cm, MAX_MEASUREMENT_DELAY); }
+
+-  // Convert raw measurement to mm
+-  static inline float raw_to_mm(const uint16_t v) { return v * 5.0f * RECIPROCAL(16383.0f); }
+-  static inline float raw_to_mm() { return raw_to_mm(raw); }
+-
+-  // A scaled reading is ready
+-  // Divide to get to 0-16384 range since we used 1/128 IIR filter approach
+-  static inline void reading_ready() { raw = accum >> 10; }
++  static float sample_to_size_ratio();
++  static void schedule_update();
++  static void service_update();
++  static bool update_from_sensor();
+
+-  // Update mm from the raw measurement
+-  static inline void update_measured_mm() { measured_mm = raw_to_mm(); }
+-
+-  // Update ring buffer used to delay filament measurements
+-  static inline void advance_e(const float &e_move) {
+-
+-    // Increment counters with the E distance
+-    e_count += e_move;
+-    delay_dist += e_move;
+-
+-    // Only get new measurements on forward E movement
+-    if (!UNEAR_ZERO(e_count)) {
+-
+-      // Loop the delay distance counter (modulus by the mm length)
+-      while (delay_dist >= MMD_MM) delay_dist -= MMD_MM;
+-
+-      // Convert into an index (cm) into the measurement array
+-      index_r = int8_t(delay_dist * 0.1f);
+-
+-      // If the ring buffer is not full...
+-      if (index_r != index_w) {
+-        e_count = 0;                            // Reset the E movement counter
+-        const int8_t meas_sample = sample_to_size_ratio();
+-        do {
+-          if (++index_w >= MMD_CM) index_w = 0; // The next unused slot
+-          ratios[index_w] = meas_sample;        // Store the measurement
+-        } while (index_r != index_w);           // More slots to fill?
+-      }
+-    }
+-  }
+-
+-  // Dynamically set the volumetric multiplier based on the delayed width measurement.
++  static void advance_e(const float &e_move);
+   static inline void update_volumetric() {
+     if (enabled) {
+       int8_t read_index = index_r - meas_delay_cm;
+@@ -114,6 +102,12 @@ public:
+     }
+   }
+
++private:
++  static inline float get_area_mm2(const float major_mm, const float minor_mm) {
++    return 0.25f * PI * major_mm * minor_mm;
++  }
++  static inline void refresh_nominal_area() { nominal_area = get_area_mm2(nominal_mm, nominal_mm); }
++  static void reset_poll_state();
+ };
+
+ extern FilamentWidthSensor filwidth;
+diff --git a/lib/Marlin/Marlin/src/module/planner.cpp b/lib/Marlin/Marlin/src/module/planner.cpp
+index 64e530dbf..53c4a78a8 100644
+--- a/lib/Marlin/Marlin/src/module/planner.cpp
++++ b/lib/Marlin/Marlin/src/module/planner.cpp
+@@ -921,7 +921,7 @@ void Planner::check_axes_activity() {
+    * into a volumetric multiplier. Conversion differs when using
+    * linear extrusion vs volumetric extrusion.
+    */
+-  void Planner::apply_filament_width_sensor(const int8_t encoded_ratio) {
++  void Planner::apply_filament_width_sensor(const float encoded_ratio) {
+     // Reconstitute the nominal/measured ratio
+     const float nom_meas_ratio = 1 + 0.01f * encoded_ratio,
+                 ratio_2 = sq(nom_meas_ratio);
+diff --git a/lib/Marlin/Marlin/src/module/planner.h b/lib/Marlin/Marlin/src/module/planner.h
+index df45657e1..70abcb40a 100644
+--- a/lib/Marlin/Marlin/src/module/planner.h
++++ b/lib/Marlin/Marlin/src/module/planner.h
+@@ -445,7 +445,7 @@ class Planner {
+     static void calculate_volumetric_multipliers();
+
+     #if ENABLED(FILAMENT_WIDTH_SENSOR)
+-      void apply_filament_width_sensor(const int8_t encoded_ratio);
++      void apply_filament_width_sensor(const float encoded_ratio);
+
+       static inline float volumetric_percent(const bool vol) {
+         return 100.0f * (vol
+diff --git a/lib/Marlin/Marlin/src/module/temperature.cpp b/lib/Marlin/Marlin/src/module/temperature.cpp
+index a8fc46947..39eb2ca71 100644
+--- a/lib/Marlin/Marlin/src/module/temperature.cpp
++++ b/lib/Marlin/Marlin/src/module/temperature.cpp
+@@ -2227,7 +2227,11 @@ void Temperature::updateTemperaturesFromRawValues() {
+     redundant_temperature = analog_to_celsius_hotend(redundant_temperature_raw, 1);
+   #endif
+   #if ENABLED(FILAMENT_WIDTH_SENSOR)
+-    filwidth.update_measured_mm();
++    #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
++      filwidth.service_update();
++    #else
++      filwidth.update_measured_mm();
++    #endif
+   #endif
+   #if HAS_TEMP_BOARD
+     temp_board.celsius = analog_to_celsius_board(temp_board.raw);
+@@ -2420,7 +2424,7 @@ void Temperature::init() {
+   #if HAS_TEMP_HEATBREAK
+     HAL_ANALOG_SELECT(TEMP_HEATBREAK_PIN);
+   #endif
+-  #if ENABLED(FILAMENT_WIDTH_SENSOR)
++  #if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
+     HAL_ANALOG_SELECT(FILWIDTH_PIN);
+   #endif
+   #if HAS_ADC_BUTTONS
+@@ -3037,8 +3041,8 @@ void Temperature::readings_ready() {
+   // Update the raw values if they've been read. Else we could be updating them during reading.
+   if (!temp_meas_ready) set_current_temp_raw();
+
+-  // Filament Sensor - can be read any time since IIR filtering is used
+-  #if ENABLED(FILAMENT_WIDTH_SENSOR)
++  // Filament Sensor - update filtered values for ADC-based sensors
++  #if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
+     filwidth.reading_ready();
+   #endif
+
+@@ -3646,13 +3650,20 @@ void Temperature::isr() {
+     #endif
+
+     #if ENABLED(FILAMENT_WIDTH_SENSOR)
+-      case Prepare_FILWIDTH: HAL_START_ADC(FILWIDTH_PIN); break;
+-      case Measure_FILWIDTH:
+-        if (!HAL_ADC_READY())
+-          next_sensor_state = adc_sensor_state; // redo this state
+-        else
+-          filwidth.accumulate(HAL_READ_ADC());
+-      break;
++      #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
++        case Prepare_FILWIDTH: break;
++        case Measure_FILWIDTH:
++          filwidth.schedule_update();
++        break;
++      #else
++        case Prepare_FILWIDTH: HAL_START_ADC(FILWIDTH_PIN); break;
++        case Measure_FILWIDTH:
++          if (!HAL_ADC_READY())
++            next_sensor_state = adc_sensor_state; // redo this state
++          else
++            filwidth.accumulate(HAL_READ_ADC());
++        break;
++      #endif
+     #endif
+
+     #if HAS_JOY_ADC_X
+diff --git a/lib/Marlin/Marlin/src/pins/stm32/pins_BUDDY_2209_02.h b/lib/Marlin/Marlin/src/pins/stm32/pins_BUDDY_2209_02.h
+index 6034be85d..d2f18a7d1 100644
+--- a/lib/Marlin/Marlin/src/pins/stm32/pins_BUDDY_2209_02.h
++++ b/lib/Marlin/Marlin/src/pins/stm32/pins_BUDDY_2209_02.h
+@@ -122,6 +122,12 @@
+ #define TEMP_HEATBREAK_PIN     MARLIN_PIN(TEMP_HEATBREAK) // Analog Input todo: why it is defined for all printers?
+ #define TEMP_CHAMBER_PIN       MARLIN_PIN(AMBIENT) // Analog Input
+
++#if BOARD_IS_XBUDDY()
++  #ifndef FILWIDTH_PIN
++    #define FILWIDTH_PIN TEMP_0_PIN // Placeholder analog pin; actual readings come from I2C sensor.
++  #endif
++#endif
++
+ #if PRINTER_IS_PRUSA_iX()
+ #define TEMP_PSU_PIN           MARLIN_PIN(TEMP_PSU)
+ #define TEMP_AMBIENT_PIN       MARLIN_PIN(TEMP_AMBIENT)
+diff --git a/src/device/stm32f4/peripherals.cpp b/src/device/stm32f4/peripherals.cpp
+index d88128a9c..ff0154439 100644
+--- a/src/device/stm32f4/peripherals.cpp
++++ b/src/device/stm32f4/peripherals.cpp
+@@ -475,7 +475,7 @@ static void i2c_free_bus_in_case_of_slave_deadlock(uint32_t clk, hw_pin sda, hw_
+     set_pin_od(sda); // reconfigure SDA to open-drain, to be able to move it
+     HAL_GPIO_WritePin(sda.port, sda.no, GPIO_PIN_RESET); // set SDA to '0' while SCL == '1' - start condition
+     delay_us_precise(i2c_get_edge_us(clk)); // wait half period
+-    HAL_GPIO_WritePin(sda.port, sda.no, GPIO_PIN_RESET); // set SDA to '1' while SCL == '1' - stop condition
++    HAL_GPIO_WritePin(sda.port, sda.no, GPIO_PIN_SET); // set SDA to '1' while SCL == '1' - stop condition
+     delay_us_precise(i2c_get_edge_us(clk)); // wait half period
+ }
+
+diff --git a/utils/bootstrap.py b/utils/bootstrap.py
+index 288ed8b2e..e2519f435 100755
+--- a/utils/bootstrap.py
++++ b/utils/bootstrap.py
+@@ -18,11 +18,9 @@ import sys
+ import tarfile
+ import venv
+ import zipfile
+-import stat
+ from argparse import ArgumentParser
+ from pathlib import Path
+ from urllib.parse import urlparse
+-import requests
+
+ assert sys.version_info >= (3, 8), 'Python 3.8+ is required.'
+ is_windows = platform.system() == 'Windows'
+@@ -32,6 +30,62 @@ venv_dir = project_root_dir / '.venv'
+ venv_bin_dir = venv_dir / 'bin' if not is_windows else venv_dir / 'Scripts'
+ running_in_venv = Path(sys.prefix).resolve() == venv_dir.resolve()
+
++
++def switch_to_venv_if_needed() -> None:
++    """Ensure this script runs inside the project virtual environment."""
++    if running_in_venv or os.environ.get('BUDDY_NO_VIRTUALENV') == '1':
++        return
++
++    if not venv_dir.exists():
++        print('Creating needed virtual environment in .venv')
++        venv.create(venv_dir, with_pip=True, prompt='buddy')
++
++    print("Switching to Buddy's virtual environment.", file=sys.stderr)
++    print(
++        'You can disable this by setting the BUDDY_NO_VIRTUALENV=1 env. variable.',
++        file=sys.stderr)
++    python_executable = venv_bin_dir / ('python.exe'
++                                        if is_windows else 'python')
++    os.execv(str(python_executable), [str(python_executable)] + sys.argv)
++
++
++switch_to_venv_if_needed()
++
++
++def ensure_requests_available():
++    """Import requests, installing it into the active interpreter if needed."""
++    try:
++        import requests  # type: ignore
++        return requests
++    except ModuleNotFoundError:
++        requirement = 'requests'
++        requirements_path = project_root_dir / 'requirements.txt'
++        try:
++            with open(requirements_path, 'r', encoding='utf-8') as req_file:
++                for raw_line in req_file:
++                    line = raw_line.strip()
++                    if not line or line.startswith('#'):
++                        continue
++                    if line.startswith('requests'):
++                        requirement = line
++                        break
++        except OSError:
++            pass
++
++        interpreter = (venv_bin_dir /
++                       ('python.exe' if is_windows else 'python')
++                       ) if running_in_venv else Path(sys.executable)
++        print(f'Installing missing dependency: {requirement}', file=sys.stderr)
++        subprocess.check_call([
++            str(interpreter), '-m', 'pip', 'install',
++            '--disable-pip-version-check', requirement
++        ])
++        import requests  # type: ignore
++        return requests
++
++
++requests = ensure_requests_available()
++
+ # All dependencies of this project.
+ #
+ # yapf: disable
+@@ -270,19 +324,6 @@ def get_dependency_directory(dependency) -> Path:
+     return Path(directory_for_dependency(dependency, version))
+
+
+-def switch_to_venv_if_nedded():
+-    if not running_in_venv and os.environ.get('BUDDY_NO_VIRTUALENV') != '1':
+-        if not os.path.exists(".venv"):
+-            print('Creating needed virtual environment in .venv')
+-            os.system(sys.executable + ' -m venv .venv')
+-        print('Switching to Buddy\'s virtual environment.', file=sys.stderr)
+-        print(
+-            'You can disable this by setting the BUDDY_NO_VIRTUALENV=1 env. variable.',
+-            file=sys.stderr)
+-        os.execv(str(venv_bin_dir / 'python'),
+-                 [str(venv_bin_dir / 'python')] + sys.argv)
+-
+-
+ def prepare_venv_if_needed():
+     if venv_dir.exists():
+         return
+diff --git a/utils/build.py b/utils/build.py
+index 6e1d5297c..c516b183c 100755
+--- a/utils/build.py
++++ b/utils/build.py
+@@ -622,7 +622,7 @@ def cmake_cache_entry(arg):
+
+
+ def main():
+-    bootstrap.switch_to_venv_if_nedded()
++    bootstrap.switch_to_venv_if_needed()
+
+     all_presets = load_presets()
+     parser = argparse.ArgumentParser()
+diff --git a/utils/simulator/simulator.py b/utils/simulator/simulator.py
+index da9f12da7..c02ab76ba 100644
+--- a/utils/simulator/simulator.py
++++ b/utils/simulator/simulator.py
+@@ -7,12 +7,12 @@ from typing import Optional, Tuple, Callable, List
+ from contextlib import asynccontextmanager, AsyncExitStack, closing
+
+ from PIL import Image
+-from bootstrap import get_dependency_directory, switch_to_venv_if_nedded
++from bootstrap import get_dependency_directory, switch_to_venv_if_needed
+ from .printer import Thermistor, MachineType, NetworkInterface
+
+ logger = logging.getLogger('simulator')
+
+-switch_to_venv_if_nedded()
++switch_to_venv_if_needed()
+
+
+ class Simulator:
+diff --git a/version.txt b/version.txt
+index 798e38995..91e4a9f26 100644
+--- a/version.txt
++++ b/version.txt
+@@ -1 +1 @@
+-6.3.0
++6.3.2

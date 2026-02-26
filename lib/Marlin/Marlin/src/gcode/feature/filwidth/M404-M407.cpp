@@ -35,7 +35,7 @@
  */
 void GcodeSuite::M404() {
   if (parser.seenval('W')) {
-    filwidth.nominal_mm = parser.value_linear_units();
+    filwidth.set_nominal_mm(parser.value_linear_units());
     planner.volumetric_area_nominal = CIRCLE_AREA(filwidth.nominal_mm * 0.5);
   }
   else
