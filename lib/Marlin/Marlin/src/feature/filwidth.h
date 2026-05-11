@@ -107,7 +107,7 @@ public:
   static float latest_axes_mm[sensor_count]; ///< Most recently popped aligned samples
   static float last_average_area;            ///< Most recently computed average integral area
 
-  static constexpr uint16_t log_capacity = 2500;
+  static constexpr uint16_t log_capacity = 1000;
   static FilLogEntry log_array[log_capacity];
   static uint16_t log_count;
   static bool logging;
