@@ -36,6 +36,7 @@
 FilamentWidthSensor filwidth;
 
 bool   FilamentWidthSensor::enabled         = true;
+bool   FilamentWidthSensor::correction_enabled = true;
 float  FilamentWidthSensor::nominal_mm      = DEFAULT_NOMINAL_FILAMENT_DIA;
 float  FilamentWidthSensor::measured_mm     = DEFAULT_MEASURED_FILAMENT_DIA;
 float  FilamentWidthSensor::nominal_area    = 0.0f;

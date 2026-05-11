@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-segment_gcode.py — G-Code Segment Splitter for Filament Width Sensor Optimization
+segment_gcode.py â€” G-Code Segment Splitter for Filament Width Sensor Optimization
 
 Prevents long linear moves (G0/G1) from monopolizing the Marlin planner block
 buffer. A single 200mm infill line becomes one planner block that executes for
-~2s at 100mm/s — during which no new filament width sensor correction can be
+~2s at 100mm/s â€” during which no new filament width sensor correction can be
 applied. This script splits such moves into shorter sub-segments.
 
 Segmentation strategy:
@@ -15,11 +15,15 @@ Segmentation strategy:
               resolution (FILWIDTH_SENSOR_QUEUE_BIN_MM = 1mm).
 
 Sensor logging injection:
-  When --sensor-lines N is given (default 8), the script automatically:
+  When --sensor-lines N is given (default 16), the script automatically:
     - Injects M407 L1 before the 1st detected print line to start logging.
       (The sensor itself is assumed to already be enabled at print start.)
-    - Injects M407 L0 + M407 D + M406 after the Nth print line.
+    - Injects M406 after line --correction-lines (default 8) to disable
+      correction only â€” the sensor keeps measuring and logging.
+    - Injects M407 L0 + M407 D after the last logged line.
   A "print line" is any G1 move that has both XY travel and extrusion (E).
+  Set --correction-lines equal to --sensor-lines (or 0) to keep correction
+  on for all logged lines (no mid-point M406).
 
 Usage as PrusaSlicer post-processor:
     "C:\\path\\to\\python.exe" "C:\\path\\to\\segment_gcode.py" --max-segment-mm 25
@@ -43,11 +47,11 @@ import time
 __version__ = "1.2.0"
 
 # ---------------------------------------------------------------------------
-# G-code parameter regex — matches e.g. "X123.456", "E-0.800", "F3600"
+# G-code parameter regex â€” matches e.g. "X123.456", "E-0.800", "F3600"
 # ---------------------------------------------------------------------------
 _PARAM_RE = re.compile(r'([XYZEF])([-+]?\d*\.?\d+)')
 
-# G-command regex — matches G0 or G1 (case-insensitive, with optional spaces)
+# G-command regex â€” matches G0 or G1 (case-insensitive, with optional spaces)
 _GCMD_RE = re.compile(r'^[Gg]\s*([01])\b')
 
 
@@ -112,7 +116,7 @@ def compute_segment_count(xy_dist: float, abs_de: float, max_seg_mm: float,
                           min_seg_mm: float, min_e_per_seg: float) -> int:
     """Determine the optimal number of sub-segments for a move.
 
-    Primary criterion: XY distance / max_seg_mm  → how many segments we'd want.
+    Primary criterion: XY distance / max_seg_mm  â†’ how many segments we'd want.
     Guard #1 (XY floor): Each segment must be >= min_seg_mm in XY.
     Guard #2 (E floor):  For extrusion moves, each segment must consume
                          >= min_e_per_seg mm of filament so the sensor has
@@ -140,7 +144,7 @@ def compute_segment_count(xy_dist: float, abs_de: float, max_seg_mm: float,
 
     # Guard #2: E distance per segment must meet the sensor minimum.
     # Only applies when there is actual extrusion (abs_de > 0).
-    # Travel moves (abs_de == 0) skip this check — they have no sensor
+    # Travel moves (abs_de == 0) skip this check â€” they have no sensor
     # interaction and should still be split to free up the planner.
     if abs_de > 0.0 and min_e_per_seg > 0.0:
         while n > 1 and (abs_de / n) < min_e_per_seg:
@@ -249,16 +253,20 @@ def process_gcode(input_lines: list,
                   max_seg_mm: float,
                   min_seg_mm: float,
                   min_e_per_seg: float,
-                  sensor_lines: int = 0) -> tuple:
+                  sensor_lines: int = 0,
+                  correction_lines: int = 0) -> tuple:
     """Process all G-code lines, segmenting long moves.
 
     Args:
-        input_lines:   List of raw G-code line strings
-        max_seg_mm:    Target maximum XY segment length
-        min_seg_mm:    Minimum XY segment length
-        min_e_per_seg: Minimum filament per segment (mm)
-        sensor_lines:  Number of print lines to wrap with M405/M407 sensor
-                       logging injection. 0 = disabled.
+        input_lines:      List of raw G-code line strings
+        max_seg_mm:       Target maximum XY segment length
+        min_seg_mm:       Minimum XY segment length
+        min_e_per_seg:    Minimum filament per segment (mm)
+        sensor_lines:     Total number of print lines to log (M407 L1 â€¦ L0 D).
+                          0 = disabled.
+        correction_lines: After this many lines, inject M406 to disable
+                          correction while keeping logging active.
+                          0 or >= sensor_lines = no mid-point M406.
 
     Returns:
         Tuple of (output_lines, stats_dict)
@@ -273,7 +281,8 @@ def process_gcode(input_lines: list,
     # Sensor injection state
     print_line_count = 0  # number of print lines seen so far
     logging_started = False  # True after M407 L1 has been injected
-    sensor_stopped = False  # True after M406 / M407 L0 D have been injected
+    correction_disabled = False  # True after mid-point M406 has been injected
+    logging_stopped = False  # True after M407 L0 / D have been injected
 
     stats = {
         'original_moves': 0,
@@ -413,7 +422,8 @@ def process_gcode(input_lines: list,
         # --- Sensor injection (absolute mode only) ---
         # Determine if this move qualifies as a "print line"
         this_is_print_line = (sensor_lines > 0 and cmd == 'G1'
-                              and is_print_line(params) and not sensor_stopped)
+                              and is_print_line(params)
+                              and not logging_stopped)
 
         if this_is_print_line:
             if not logging_started:
@@ -439,14 +449,27 @@ def process_gcode(input_lines: list,
 
         if this_is_print_line:
             print_line_count += 1
-            if print_line_count >= sensor_lines and not sensor_stopped:
-                # Inject logging-stop + dump + sensor-off after the Nth line
+
+            # Mid-point: disable correction after correction_lines lines
+            mid = correction_lines
+            if (mid > 0 and mid < sensor_lines and print_line_count >= mid
+                    and not correction_disabled):
                 output_lines.append(
-                    "; --- filwidth logging stop + dump + sensor OFF ---\n")
+                    "; --- filwidth correction OFF (sensor still logging) ---\n"
+                )
+                output_lines.append(
+                    "M406\n")  # disable correction, keep measuring
+                correction_disabled = True
+
+            # End: stop logging and dump after sensor_lines lines
+            if print_line_count >= sensor_lines and not logging_stopped:
+                output_lines.append("; --- filwidth logging stop + dump ---\n")
                 output_lines.append("M407 L0\n")  # stop logging
                 output_lines.append("M407 D\n")  # dump log over serial
-                output_lines.append("M406\n")  # disable filament width sensor
-                sensor_stopped = True
+                if not correction_disabled:
+                    # No mid-point M406 was injected: disable now as well
+                    output_lines.append("M406\n")
+                logging_stopped = True
 
         # Update current position with whatever this move sets
         if 'X' in params:
@@ -510,11 +533,11 @@ def main():
         epilog="PrusaSlicer appends the G-code file path as the last "
         "positional argument automatically.\n\n"
         "Typical filament consumption per mm of XY travel:\n"
-        "  0.2mm layer, 0.45mm width, 1.75mm filament → ~0.037 mm E / mm XY\n"
-        "  0.3mm layer, 0.45mm width, 1.75mm filament → ~0.056 mm E / mm XY\n\n"
+        "  0.2mm layer, 0.45mm width, 1.75mm filament â†’ ~0.037 mm E / mm XY\n"
+        "  0.3mm layer, 0.45mm width, 1.75mm filament â†’ ~0.056 mm E / mm XY\n\n"
         "At --max-segment-mm 25:\n"
-        "  0.2mm layer → ~0.94 mm E/segment (≈1 sensor bin)\n"
-        "  0.3mm layer → ~1.40 mm E/segment (>1 sensor bin)\n")
+        "  0.2mm layer â†’ ~0.94 mm E/segment (â‰ˆ1 sensor bin)\n"
+        "  0.3mm layer â†’ ~1.40 mm E/segment (>1 sensor bin)\n")
     parser.add_argument(
         'gcode_file',
         help="Path to the G-code file to process (modified in-place)")
@@ -528,7 +551,7 @@ def main():
         '--min-segment-mm',
         type=float,
         default=5.0,
-        help="Minimum XY segment length in mm — prevents tiny fragments. "
+        help="Minimum XY segment length in mm â€” prevents tiny fragments. "
         "(default: 5.0)")
     parser.add_argument(
         '--min-e-per-segment-mm',
@@ -540,11 +563,18 @@ def main():
     parser.add_argument(
         '--sensor-lines',
         type=int,
+        default=16,
+        help="Total number of extrusion print lines to log with M407. "
+        "'M407 L1' is injected before line 1, 'M407 L0' + 'M407 D' after "
+        "line N. Set to 0 to disable. (default: 16)")
+    parser.add_argument(
+        '--correction-lines',
+        type=int,
         default=8,
-        help="Number of extrusion print lines to wrap with M407 sensor "
-        "logging. 'M407 L1' is injected before line 1 (sensor is assumed "
-        "already on), and 'M407 L0' + 'M407 D' + M406 after line N. "
-        "Set to 0 to disable. (default: 8)")
+        help="After this many lines, inject M406 to disable extrusion "
+        "correction while the sensor keeps measuring and logging. "
+        "Set to 0 or >= --sensor-lines to keep correction on for all "
+        "logged lines. (default: 8)")
     parser.add_argument('--version',
                         action='version',
                         version=f'%(prog)s {__version__}')
@@ -556,6 +586,7 @@ def main():
     min_seg = args.min_segment_mm
     min_e = args.min_e_per_segment_mm
     sensor_lines = args.sensor_lines
+    correction_lines = args.correction_lines
 
     # Validate arguments
     if max_seg < 1.0:
@@ -590,13 +621,16 @@ def main():
 
     # Process
     if sensor_lines > 0:
-        print(f"[segment_gcode] Sensor injection: M405/M407 logging wrapping "
-              f"first {sensor_lines} print line(s).")
+        print(
+            f"[segment_gcode] Sensor injection: logging {sensor_lines} "
+            f"print line(s), correction disabled after "
+            f"{correction_lines if 0 < correction_lines < sensor_lines else sensor_lines} lines."
+        )
     print(f"[segment_gcode] Processing with max_xy={max_seg}mm, "
           f"min_xy={min_seg}mm, min_e={min_e}mm ...")
     t_start = time.monotonic()
     output_lines, stats = process_gcode(input_lines, max_seg, min_seg, min_e,
-                                        sensor_lines)
+                                        sensor_lines, correction_lines)
     t_elapsed = time.monotonic() - t_start
 
     # Calculate new file size (approximate, for the header)

@@ -55,10 +55,17 @@ void GcodeSuite::M405() {
 }
 
 /**
- * M406: Turn off filament sensor for control
+ * M406: Disable filament sensor correction (sensor keeps measuring/logging).
+ *  S<0|1> - Optional. S0 fully disables the sensor (stops measuring entirely).
+ *           Default (no S param): correction is disabled but sensor stays active.
  */
 void GcodeSuite::M406() {
-  filwidth.enable(false);
+  if (parser.seen('S') && parser.value_bool() == false) {
+    // S0: full disable — stop measuring entirely (legacy behavior)
+    filwidth.enable(false);
+  }
+  // Always disable correction and reset the volumetric multiplier to 1.0
+  FilamentWidthSensor::correction_enabled = false;
   planner.calculate_volumetric_multipliers();   // Restore correct 'volumetric_multiplier' value
 }
 

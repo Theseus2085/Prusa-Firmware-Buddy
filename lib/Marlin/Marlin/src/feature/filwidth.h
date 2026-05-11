@@ -76,6 +76,7 @@ public:
   static constexpr int MMD_MM = MMD_CM * 10;
 
   static bool enabled;              // (M405-M406) Filament Width Sensor ON/OFF.
+  static bool correction_enabled;   // (M406) Apply the sensor correction to e_factor. Sensor keeps measuring when false.
   static float nominal_mm;          // Nominal filament width
   static float measured_mm;         // Measured filament diameter (equivalent diameter for ellipse)
   static float nominal_area;        // Reference ellipse area for nominal filament
@@ -145,6 +146,7 @@ public:
   static inline void enable(const bool ena) {
     if (ena && !enabled) reset_poll_state();
     enabled = ena;
+    if (ena) correction_enabled = true;  // re-enabling the sensor always restores correction
   }
   static void set_delay_cm(uint8_t cm);
   static void set_nominal_mm(float mm);

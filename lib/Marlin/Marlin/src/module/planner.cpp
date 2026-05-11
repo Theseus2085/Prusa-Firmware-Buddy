@@ -1427,7 +1427,12 @@ bool Planner::_populate_block(block_t *const block,
      */
     if (filwidth.enabled && de) {
         const float abs_e_mm = ABS(de * mm_per_mstep[E_AXIS_N(extruder)]);
-        planner.apply_filament_width_sensor(filwidth.get_averaged_size_ratio(abs_e_mm));
+        const float size_ratio = filwidth.get_averaged_size_ratio(abs_e_mm);
+
+        // Apply the volumetric correction only when correction is enabled (M405/M406)
+        if (FilamentWidthSensor::correction_enabled) {
+            planner.apply_filament_width_sensor(size_ratio);
+        }
 
         if (FilamentWidthSensor::logging && FilamentWidthSensor::log_count < FilamentWidthSensor::log_capacity) {
             FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].x = target_float.x;
