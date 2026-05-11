@@ -386,6 +386,38 @@ public:
     MI_INFO_SIDE_FILL_SENSOR();
 };
 
+#if ENABLED(FILAMENT_WIDTH_SENSOR)
+class MI_INFO_FILWIDTH_RAW : public MenuItemAutoUpdatingLabel<float> {
+public:
+    MI_INFO_FILWIDTH_RAW();
+};
+
+class MI_INFO_OVALITY_SENSOR : public MenuItemAutoUpdatingLabel<float> {
+public:
+    MI_INFO_OVALITY_SENSOR();
+};
+
+class MI_INFO_OVALITY_SENSOR_AVG : public MenuItemAutoUpdatingLabel<float> {
+public:
+    MI_INFO_OVALITY_SENSOR_AVG();
+};
+
+class MI_INFO_FILWIDTH_AT_NOZZLE : public MenuItemAutoUpdatingLabel<float> {
+public:
+    MI_INFO_FILWIDTH_AT_NOZZLE();
+};
+
+class MI_INFO_OVALITY_NOZZLE : public MenuItemAutoUpdatingLabel<float> {
+public:
+    MI_INFO_OVALITY_NOZZLE();
+};
+
+class MI_INFO_OVALITY_NOZZLE_AVG : public MenuItemAutoUpdatingLabel<float> {
+public:
+    MI_INFO_OVALITY_NOZZLE_AVG();
+};
+#endif
+
 class MI_INFO_PRINT_FAN : public WI_FAN_LABEL_t {
 public:
     MI_INFO_PRINT_FAN();

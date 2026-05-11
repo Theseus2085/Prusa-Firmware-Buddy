@@ -61,13 +61,22 @@
   #endif
 #endif
 
+struct FilLogEntry {
+  float x;
+  float y;
+  float vol_mult;
+  float exp_area;
+  float meas_area;
+  float meas_dia;
+};
+
 class FilamentWidthSensor {
 public:
   static constexpr int MMD_CM = MAX_MEASUREMENT_DELAY + 1;
   static constexpr int MMD_MM = MMD_CM * 10;
 
   static bool enabled;              // (M405-M406) Filament Width Sensor ON/OFF.
-  static float nominal_mm;          // (M104) Nominal filament width
+  static float nominal_mm;          // Nominal filament width
   static float measured_mm;         // Measured filament diameter (equivalent diameter for ellipse)
   static float nominal_area;        // Reference ellipse area for nominal filament
   static float e_count;             // Extruder movement accumulator
@@ -95,6 +104,12 @@ public:
   static float retraction_debt_mm;     ///< Tracks retracted distance to pause sensor enqueueing
   static float next_enqueue_mm;        ///< Distance threshold for the next sensor read
   static float latest_axes_mm[sensor_count]; ///< Most recently popped aligned samples
+  static float last_average_area;            ///< Most recently computed average integral area
+
+  static constexpr uint16_t log_capacity = 4000;
+  static FilLogEntry log_array[log_capacity];
+  static uint16_t log_count;
+  static bool logging;
 
   /**
    * @brief Pushes a raw sensor measurement into the spatial alignment queue.
@@ -104,12 +119,12 @@ public:
   static void enqueue_sensor_sample(uint8_t sensor_index, float diameter_mm);
 
   /**
-   * @brief Attempts to pop a synchronized sample pair that has reached the nozzle.
-   * @param axis_a_mm Output parameter for the first axis.
-   * @param axis_b_mm Output parameter for the second axis.
-   * @return true if a synchronized pair was popped, false if still buffered.
+   * @brief Attempts to pop a single sample from the specified axis that has reached the nozzle.
+   * @param axis_index The physical axis index (0 or 1).
+   * @param axis_mm Output parameter for the axis diameter.
+   * @return true if a sample was popped, false if still buffered or empty.
    */
-  static bool try_pop_aligned_sample(float &axis_a_mm, float &axis_b_mm);
+  static bool try_pop_axis_sample(uint8_t axis_index, float &axis_mm);
 
   /**
    * @brief Processes all samples that have reached the extruder nozzle and updates the effective diameter.
@@ -181,7 +196,7 @@ public:
 
 private:
   static inline float get_area_mm2(const float major_mm, const float minor_mm) {
-    return 0.25f * PI * major_mm * minor_mm;
+    return 0.25f * (float)PI * major_mm * minor_mm;
   }
   static inline void refresh_nominal_area() { nominal_area = get_area_mm2(nominal_mm, nominal_mm); }
   static void clear_alignment_queues();

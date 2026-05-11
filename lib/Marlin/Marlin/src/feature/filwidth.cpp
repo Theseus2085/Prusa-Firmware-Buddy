@@ -61,6 +61,11 @@ float  FilamentWidthSensor::latest_axes_mm[sensor_count] = {
   DEFAULT_NOMINAL_FILAMENT_DIA,
   DEFAULT_NOMINAL_FILAMENT_DIA
 };
+float  FilamentWidthSensor::last_average_area = 0.0f;
+
+uint16_t FilamentWidthSensor::log_count = 0;
+bool FilamentWidthSensor::logging = false;
+FilLogEntry FilamentWidthSensor::log_array[FilamentWidthSensor::log_capacity] = { {0} };
 
 namespace {
   static_assert(FILWIDTH_SENSOR_DIGITS == 5, "Filwidth wire protocol expects 5 digits per axis.");
@@ -364,48 +369,51 @@ void FilamentWidthSensor::enqueue_sensor_sample(const uint8_t sensor_index, cons
 }
 
 /**
- * @brief Verifies if the extruder has advanced enough to pop a synchronized sample pair.
+ * @brief Verifies if the extruder has advanced enough to pop a sample for the specified axis.
  * 
  * A sample is only "ready" when the absolute `filament_position_mm` tracked by the 
  * stepper motors equals or exceeds the spatial target recorded during enqueueing.
- * Both axes must be ready to yield a valid elliptical cross-section.
  * 
- * @param axis_a_mm Output parameter for axis A's diameter.
- * @param axis_b_mm Output parameter for axis B's diameter.
- * @return true if a valid synchronized pair was dequeued.
+ * @param axis_index The physical axis index (0 or 1).
+ * @param axis_mm Output parameter for the axis diameter.
+ * @return true if a valid sample was dequeued.
  */
-bool FilamentWidthSensor::try_pop_aligned_sample(float &axis_a_mm, float &axis_b_mm) {
-  if (!sensor_size[0] || !sensor_size[1]) return false;
+bool FilamentWidthSensor::try_pop_axis_sample(uint8_t axis_index, float &axis_mm) {
+  if (axis_index >= sensor_count || !sensor_size[axis_index]) return false;
 
-  const uint16_t head_a = sensor_head[0];
-  const uint16_t head_b = sensor_head[1];
+  const uint16_t head = sensor_head[axis_index];
 
-  if (filament_position_mm < sensor_targets_mm[0][head_a]) return false;
-  if (filament_position_mm < sensor_targets_mm[1][head_b]) return false;
+  if (filament_position_mm < sensor_targets_mm[axis_index][head]) return false;
 
-  axis_a_mm = sensor_queue[0][head_a];
-  axis_b_mm = sensor_queue[1][head_b];
+  axis_mm = sensor_queue[axis_index][head];
 
-  sensor_head[0] = (head_a + 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY;
-  sensor_head[1] = (head_b + 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY;
-  --sensor_size[0];
-  --sensor_size[1];
+  sensor_head[axis_index] = (head + 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY;
+  --sensor_size[axis_index];
   return true;
 }
 
 /**
  * @brief Dequeues all ready samples and computes the final effective diameter.
  * 
- * Loops over `try_pop_aligned_sample` until the queue is either empty or the next 
+ * Loops over `try_pop_axis_sample` until the queue is either empty or the next 
  * sample hasn't reached the nozzle yet. Updates the global `measured_mm`.
  */
 void FilamentWidthSensor::process_ready_samples() {
-  float axis_a = latest_axes_mm[0];
-  float axis_b = latest_axes_mm[1];
-  while (try_pop_aligned_sample(axis_a, axis_b)) {
-    latest_axes_mm[0] = axis_a;
-    latest_axes_mm[1] = axis_b;
-    measured_mm = compute_equivalent_diameter(axis_a, axis_b);
+  bool updated = false;
+  float axis_mm;
+  
+  while (try_pop_axis_sample(0, axis_mm)) {
+    latest_axes_mm[0] = axis_mm;
+    updated = true;
+  }
+  
+  while (try_pop_axis_sample(1, axis_mm)) {
+    latest_axes_mm[1] = axis_mm;
+    updated = true;
+  }
+  
+  if (updated) {
+    measured_mm = compute_equivalent_diameter(latest_axes_mm[0], latest_axes_mm[1]);
   }
 }
 
@@ -502,15 +510,15 @@ float FilamentWidthSensor::get_averaged_size_ratio(float extrude_mm) {
   float total_area_times_length = 0.0f;
 
   while (simulated_position_mm < end_position_mm) {
-    bool can_pop = (sim_size_a > 0 && sim_size_b > 0);
-    float target_a = can_pop ? sensor_targets_mm[0][sim_head_a] : end_position_mm + 1.0f;
-    float target_b = can_pop ? sensor_targets_mm[1][sim_head_b] : end_position_mm + 1.0f;
+    bool can_pop_a = (sim_size_a > 0);
+    bool can_pop_b = (sim_size_b > 0);
+    float target_a = can_pop_a ? sensor_targets_mm[0][sim_head_a] : end_position_mm + 1.0f;
+    float target_b = can_pop_b ? sensor_targets_mm[1][sim_head_b] : end_position_mm + 1.0f;
 
     // Determine the next simulation boundary (either a queued measurement or the target end position)
     float next_event_mm = end_position_mm;
-    if (can_pop) {
-      next_event_mm = std::min(next_event_mm, std::max(target_a, target_b));
-    }
+    next_event_mm = std::min(next_event_mm, target_a);
+    next_event_mm = std::min(next_event_mm, target_b);
 
     const float current_area = get_area_mm2(std::max(sim_latest_a, 0.01f), std::max(sim_latest_b, 0.01f));
     float step_length = next_event_mm - simulated_position_mm;
@@ -521,19 +529,22 @@ float FilamentWidthSensor::get_averaged_size_ratio(float extrude_mm) {
     total_area_times_length += current_area * step_length;
     simulated_position_mm += step_length;
 
-    // Advance simulated read pointers if we crossed a queued sample target
-    if (can_pop && simulated_position_mm >= std::max(target_a, target_b)) {
+    // Advance simulated read pointers independently if we crossed a queued sample target
+    if (can_pop_a && simulated_position_mm >= target_a) {
       sim_latest_a = sensor_queue[0][sim_head_a];
-      sim_latest_b = sensor_queue[1][sim_head_b];
       sim_head_a = (sim_head_a + 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY;
-      sim_head_b = (sim_head_b + 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY;
       sim_size_a--;
+    }
+    if (can_pop_b && simulated_position_mm >= target_b) {
+      sim_latest_b = sensor_queue[1][sim_head_b];
+      sim_head_b = (sim_head_b + 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY;
       sim_size_b--;
     }
   }
 
   // Aggregate area / extrude_mm returns the average area, from which the size ratio is derived.
   const float average_area = total_area_times_length / extrude_mm;
+  last_average_area = average_area;
   return (nominal_area / average_area) * 100.0f - 100.0f;
 #else
   // Fallback for analog sensors: return the current ratio at index_r - meas_delay_cm

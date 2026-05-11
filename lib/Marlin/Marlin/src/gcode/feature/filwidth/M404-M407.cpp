@@ -64,9 +64,34 @@ void GcodeSuite::M406() {
 
 /**
  * M407: Get measured filament diameter on serial output
+ *  L<0|1> - Stop/Start logging data to array
+ *  D      - Dump log array to serial output
  */
 void GcodeSuite::M407() {
-  SERIAL_ECHOLNPAIR("Filament dia (measured mm):", filwidth.measured_mm);
+  if (parser.seen('L')) {
+    if (parser.value_bool()) {
+      FilamentWidthSensor::logging = true;
+      FilamentWidthSensor::log_count = 0;
+      SERIAL_ECHOLNPGM("FilWidth logging started.");
+    } else {
+      FilamentWidthSensor::logging = false;
+      SERIAL_ECHOLNPGM("FilWidth logging stopped.");
+    }
+  } else if (parser.seen('D')) {
+    SERIAL_ECHOLNPGM("X,Y,VolMult,ExpArea,MeasArea,MeasDia");
+    for (uint16_t i = 0; i < FilamentWidthSensor::log_count; i++) {
+      SERIAL_ECHO(FilamentWidthSensor::log_array[i].x);
+      SERIAL_ECHOPAIR(",", FilamentWidthSensor::log_array[i].y);
+      SERIAL_ECHOPAIR(",", FilamentWidthSensor::log_array[i].vol_mult);
+      SERIAL_ECHOPAIR(",", FilamentWidthSensor::log_array[i].exp_area);
+      SERIAL_ECHOPAIR(",", FilamentWidthSensor::log_array[i].meas_area);
+      SERIAL_ECHOPAIR(",", FilamentWidthSensor::log_array[i].meas_dia);
+      SERIAL_ECHOLN("");
+    }
+    SERIAL_ECHOLNPGM("Dump complete.");
+  } else {
+    SERIAL_ECHOLNPAIR("Filament dia (measured mm):", filwidth.measured_mm);
+  }
 }
 
 #endif // FILAMENT_WIDTH_SENSOR

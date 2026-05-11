@@ -1428,6 +1428,16 @@ bool Planner::_populate_block(block_t *const block,
     if (filwidth.enabled && de) {
         const float abs_e_mm = ABS(de * mm_per_mstep[E_AXIS_N(extruder)]);
         planner.apply_filament_width_sensor(filwidth.get_averaged_size_ratio(abs_e_mm));
+
+        if (FilamentWidthSensor::logging && FilamentWidthSensor::log_count < FilamentWidthSensor::log_capacity) {
+            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].x = target_float.x;
+            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].y = target_float.y;
+            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].vol_mult = planner.volumetric_multiplier[extruder];
+            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].exp_area = FilamentWidthSensor::nominal_area;
+            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].meas_area = FilamentWidthSensor::last_average_area;
+            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].meas_dia = 2.0f * sqrtf(FilamentWidthSensor::last_average_area / (float)PI);
+            FilamentWidthSensor::log_count++;
+        }
     }
     #endif
 

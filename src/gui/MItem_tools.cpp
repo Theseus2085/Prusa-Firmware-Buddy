@@ -705,6 +705,77 @@ MI_INFO_SIDE_FILL_SENSOR::MI_INFO_SIDE_FILL_SENSOR()
     set_is_hidden(GetSideFSensor(marlin_vars().active_extruder.get()) == nullptr);
 }
 
+#if ENABLED(FILAMENT_WIDTH_SENSOR)
+    #include "../lib/Marlin/Marlin/src/feature/filwidth.h"
+
+/*****************************************************************************/
+// MI_INFO_FILWIDTH_RAW
+MI_INFO_FILWIDTH_RAW::MI_INFO_FILWIDTH_RAW()
+    : MenuItemAutoUpdatingLabel(_("Filwidth Sensor"), "%.3f mm",
+        [](auto) {
+            float a = filwidth.sensor_size[0] > 0 ? filwidth.sensor_queue[0][(filwidth.sensor_head[0] + filwidth.sensor_size[0] - 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY] : filwidth.nominal_mm;
+            float b = filwidth.sensor_size[1] > 0 ? filwidth.sensor_queue[1][(filwidth.sensor_head[1] + filwidth.sensor_size[1] - 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY] : filwidth.nominal_mm;
+            return FilamentWidthSensor::compute_equivalent_diameter(a, b);
+        } //
+    ) {}
+
+/*****************************************************************************/
+// MI_INFO_OVALITY_SENSOR
+MI_INFO_OVALITY_SENSOR::MI_INFO_OVALITY_SENSOR()
+    : MenuItemAutoUpdatingLabel(_("Ovality Sensor"), "%.3f %%",
+        [](auto) {
+            float a = filwidth.sensor_size[0] > 0 ? filwidth.sensor_queue[0][(filwidth.sensor_head[0] + filwidth.sensor_size[0] - 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY] : filwidth.nominal_mm;
+            float b = filwidth.sensor_size[1] > 0 ? filwidth.sensor_queue[1][(filwidth.sensor_head[1] + filwidth.sensor_size[1] - 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY] : filwidth.nominal_mm;
+            return 100.0f * std::abs(a - b) / std::max(filwidth.nominal_mm, 0.01f);
+        } //
+    ) {}
+
+/*****************************************************************************/
+// MI_INFO_OVALITY_SENSOR_AVG
+MI_INFO_OVALITY_SENSOR_AVG::MI_INFO_OVALITY_SENSOR_AVG()
+    : MenuItemAutoUpdatingLabel(_("Ovality Sens Avg"), "%.3f %%",
+        [](auto) {
+            float a = filwidth.sensor_size[0] > 0 ? filwidth.sensor_queue[0][(filwidth.sensor_head[0] + filwidth.sensor_size[0] - 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY] : filwidth.nominal_mm;
+            float b = filwidth.sensor_size[1] > 0 ? filwidth.sensor_queue[1][(filwidth.sensor_head[1] + filwidth.sensor_size[1] - 1) % FILWIDTH_SENSOR_QUEUE_CAPACITY] : filwidth.nominal_mm;
+            float avg = (a + b) / 2.0f;
+            return 100.0f * std::abs(a - b) / std::max(avg, 0.01f);
+        } //
+    ) {}
+
+/*****************************************************************************/
+// MI_INFO_FILWIDTH_AT_NOZZLE
+MI_INFO_FILWIDTH_AT_NOZZLE::MI_INFO_FILWIDTH_AT_NOZZLE()
+    : MenuItemAutoUpdatingLabel(_("Filwidth Nozzle"), "%.3f mm",
+        [](auto) {
+            return FilamentWidthSensor::compute_equivalent_diameter(
+                filwidth.latest_axes_mm[0], filwidth.latest_axes_mm[1]);
+        } //
+    ) {}
+
+/*****************************************************************************/
+// MI_INFO_OVALITY_NOZZLE
+MI_INFO_OVALITY_NOZZLE::MI_INFO_OVALITY_NOZZLE()
+    : MenuItemAutoUpdatingLabel(_("Ovality Nozzle"), "%.3f %%",
+        [](auto) {
+            float a = filwidth.latest_axes_mm[0];
+            float b = filwidth.latest_axes_mm[1];
+            return 100.0f * std::abs(a - b) / std::max(filwidth.nominal_mm, 0.01f);
+        } //
+    ) {}
+
+/*****************************************************************************/
+// MI_INFO_OVALITY_NOZZLE_AVG
+MI_INFO_OVALITY_NOZZLE_AVG::MI_INFO_OVALITY_NOZZLE_AVG()
+    : MenuItemAutoUpdatingLabel(_("Ovality Noz Avg"), "%.3f %%",
+        [](auto) {
+            float a = filwidth.latest_axes_mm[0];
+            float b = filwidth.latest_axes_mm[1];
+            float avg = (a + b) / 2.0f;
+            return 100.0f * std::abs(a - b) / std::max(avg, 0.01f);
+        } //
+    ) {}
+#endif
+
 /*****************************************************************************/
 // MI_INFO_PRINT_FAN
 
