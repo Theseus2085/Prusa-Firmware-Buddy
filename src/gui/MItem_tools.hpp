@@ -387,6 +387,16 @@ public:
 };
 
 #if ENABLED(FILAMENT_WIDTH_SENSOR)
+class MI_FILWIDTH_ENABLE : public WI_ICON_SWITCH_OFF_ON_t {
+    static constexpr const char *const label = N_("Filwidth Sensor");
+
+public:
+    MI_FILWIDTH_ENABLE();
+
+protected:
+    void OnChange(size_t old_index) override;
+};
+
 class MI_INFO_FILWIDTH_RAW : public MenuItemAutoUpdatingLabel<float> {
 public:
     MI_INFO_FILWIDTH_RAW();

@@ -122,9 +122,11 @@
 #define TEMP_HEATBREAK_PIN     MARLIN_PIN(TEMP_HEATBREAK) // Analog Input todo: why it is defined for all printers?
 #define TEMP_CHAMBER_PIN       MARLIN_PIN(AMBIENT) // Analog Input
 
+// Marlin's SanityCheck.h requires a FILWIDTH_PIN when FILAMENT_WIDTH_SENSOR is
+// enabled. The I2C sensor module does not use it; this only satisfies the check.
 #if BOARD_IS_XBUDDY()
   #ifndef FILWIDTH_PIN
-    #define FILWIDTH_PIN TEMP_0_PIN // Placeholder analog pin; actual readings come from I2C sensor.
+    #define FILWIDTH_PIN TEMP_0_PIN
   #endif
 #endif
 

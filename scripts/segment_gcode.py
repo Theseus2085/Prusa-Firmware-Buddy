@@ -54,6 +54,9 @@ _PARAM_RE = re.compile(r'([XYZEF])([-+]?\d*\.?\d+)')
 # G-command regex â€” matches G0 or G1 (case-insensitive, with optional spaces)
 _GCMD_RE = re.compile(r'^[Gg]\s*([01])\b')
 
+# Matches "G92 ..." (but not G92.1) - coordinate system reset
+_G92_RE = re.compile(r'^G92(\s|$)')
+
 
 def parse_gcode_params(line: str) -> dict:
     """Extract G-code parameters from a line into a dict.
@@ -153,100 +156,11 @@ def compute_segment_count(xy_dist: float, abs_de: float, max_seg_mm: float,
     return n
 
 
-def segment_move(current_pos: dict, params: dict, cmd: str, max_seg_mm: float,
-                 min_seg_mm: float, min_e_per_seg: float) -> list:
-    """Split a single G0/G1 move into sub-segments if it exceeds thresholds.
 
-    Args:
-        current_pos:   Current head position {'X': ..., 'Y': ..., 'Z': ..., 'E': ...}
-        params:        Parsed parameters of this move
-        cmd:           "G0" or "G1"
-        max_seg_mm:    Target maximum XY segment length (mm)
-        min_seg_mm:    Minimum XY segment length (mm)
-        min_e_per_seg: Minimum filament per segment (mm)
-
-    Returns:
-        List of G-code line strings, or None if the move should be emitted as-is.
-    """
-    # Determine start and end positions for axes present in this move
-    start_x = current_pos.get('X', 0.0)
-    start_y = current_pos.get('Y', 0.0)
-    start_z = current_pos.get('Z', 0.0)
-    start_e = current_pos.get('E', 0.0)
-
-    end_x = params.get('X', start_x)
-    end_y = params.get('Y', start_y)
-    end_z = params.get('Z', start_z)
-    end_e = params.get('E', start_e)
-
-    dx = end_x - start_x
-    dy = end_y - start_y
-    dz = end_z - start_z
-    de = end_e - start_e
-
-    # Calculate the move distance in XY (primary segmentation axis)
-    xy_dist = calculate_xy_distance(dx, dy)
-
-    # --- Skip moves that should never be segmented ---
-
-    # Don't segment pure Z moves (layer changes) or pure E moves (retraction)
-    has_xy = ('X' in params or 'Y' in params)
-    has_z_only = ('Z' in params and not has_xy and 'E' not in params)
-    has_e_only = ('E' in params and not has_xy and 'Z' not in params)
-
-    if has_z_only or has_e_only:
-        return None
-
-    # For moves with a Z component but no/negligible XY, use XYZ distance
-    # so that long ramp moves are still caught
-    if xy_dist < 0.01 and abs(dz) > 0.01:
-        xy_dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-
-    # --- Compute segment count with dual criteria ---
-    abs_de = abs(de)
-    n_segments = compute_segment_count(xy_dist, abs_de, max_seg_mm, min_seg_mm,
-                                       min_e_per_seg)
-
-    if n_segments <= 1:
-        return None
-
-    # --- Perform interpolation ---
-    lines = []
-    has_x = 'X' in params
-    has_y = 'Y' in params
-    has_z = 'Z' in params
-    has_e = 'E' in params
-    has_f = 'F' in params
-
-    for i in range(1, n_segments + 1):
-        t = i / n_segments  # Interpolation parameter [0..1]
-        seg_params = {}
-
-        if has_x:
-            seg_params['X'] = start_x + dx * t
-        if has_y:
-            seg_params['Y'] = start_y + dy * t
-        if has_z:
-            seg_params['Z'] = start_z + dz * t
-        if has_e:
-            seg_params['E'] = start_e + de * t
-        if has_f:
-            seg_params['F'] = params['F']
-
-        # Only include F on the first sub-segment (it's modal in G-code)
-        include_f = (i == 1 and has_f)
-
-        line = build_gcode_line(cmd, seg_params, include_f=include_f)
-        lines.append(line)
-
-    return lines
-
-
-def is_print_line(params: dict) -> bool:
-    """Return True if a G1 move has both XY travel and extrusion."""
+def is_print_line(params: dict, de: float) -> bool:
+    """Return True if a G1 move travels in XY while extruding forward."""
     has_xy = 'X' in params or 'Y' in params
-    has_e = 'E' in params
-    return has_xy and has_e
+    return has_xy and 'E' in params and de > 0.0
 
 
 def process_gcode(input_lines: list,
@@ -293,6 +207,37 @@ def process_gcode(input_lines: list,
         'skipped_by_e_guard': 0,
     }
 
+    def inject_start_if_needed():
+        nonlocal logging_started
+        if logging_started:
+            return
+        output_lines.append("; --- filwidth logging start ---\n")
+        output_lines.append("M407 L1\n")  # start logging
+        logging_started = True
+
+    def inject_line_hooks():
+        """Mid-point / end injections after a print line was emitted (both modes)."""
+        nonlocal print_line_count, correction_disabled, logging_stopped
+        print_line_count += 1
+
+        mid = correction_lines
+        if (mid > 0 and mid < sensor_lines and print_line_count >= mid
+                and not correction_disabled):
+            output_lines.append(
+                "; --- filwidth correction OFF (sensor still logging) ---\n"
+            )
+            output_lines.append("M406\n")  # disable correction, keep measuring
+            correction_disabled = True
+
+        if print_line_count >= sensor_lines and not logging_stopped:
+            output_lines.append("; --- filwidth logging stop + dump ---\n")
+            output_lines.append("M407 L0\n")  # stop logging
+            output_lines.append("M407 D\n")  # dump log over serial
+            if not correction_disabled:
+                # No mid-point M406 was injected: disable now as well
+                output_lines.append("M406\n")
+            logging_stopped = True
+
     for line in input_lines:
         stripped = line.strip()
 
@@ -320,6 +265,17 @@ def process_gcode(input_lines: list,
             absolute_e = False
             output_lines.append(line)
             continue
+        elif _G92_RE.match(stripped):
+            # Coordinate reset (e.g. "G92 E0" after priming): keep the tracked
+            # position in sync, otherwise later absolute-E interpolation would
+            # use a stale origin and produce wrong extrusion amounts.
+            rest = stripped[3:].split(';')[0]
+            for axis in ('X', 'Y', 'Z', 'E'):
+                m = re.search(rf'{axis}\s*([-+]?\d*\.?\d+)', rest)
+                if m:
+                    current_pos[axis] = float(m.group(1))
+            output_lines.append(line)
+            continue
 
         # Only process G0/G1 commands
         gcmd_match = _GCMD_RE.match(stripped)
@@ -337,149 +293,107 @@ def process_gcode(input_lines: list,
 
         stats['original_moves'] += 1
 
-        # --- Handle relative mode ---
-        if not absolute_xyz or not absolute_e:
-            rel_dx = params.get('X', 0.0)
-            rel_dy = params.get('Y', 0.0)
-            rel_dz = params.get('Z', 0.0)
-            rel_de = params.get('E', 0.0)
+        # --- Compute this move's deltas in the file's current modal modes ---
+        # Handles all four combinations of absolute/relative XYZ and E,
+        # including the PrusaSlicer MK4 default of absolute XYZ + relative E.
+        if absolute_xyz:
+            dx = params.get('X', current_pos['X']) - current_pos['X']
+            dy = params.get('Y', current_pos['Y']) - current_pos['Y']
+            dz = params.get('Z', current_pos['Z']) - current_pos['Z']
+        else:
+            dx = params.get('X', 0.0)
+            dy = params.get('Y', 0.0)
+            dz = params.get('Z', 0.0)
+        if absolute_e:
+            de = params.get('E', current_pos['E']) - current_pos['E']
+        else:
+            de = params.get('E', 0.0)
 
-            xy_dist = calculate_xy_distance(rel_dx, rel_dy)
-            if xy_dist < 0.01 and abs(rel_dz) > 0.01:
-                xy_dist = math.sqrt(rel_dx**2 + rel_dy**2 + rel_dz**2)
+        # --- Sensor injection (all modal modes) ---
+        # A "print line" travels in XY while extruding forward; retractions do
+        # not count.
+        this_is_print_line = (sensor_lines > 0 and cmd == 'G1'
+                              and is_print_line(params, de)
+                              and not logging_stopped)
+        if this_is_print_line:
+            inject_start_if_needed()
 
-            stats['longest_original_mm'] = max(stats['longest_original_mm'],
-                                               xy_dist)
-
-            has_xy = ('X' in params or 'Y' in params)
-            has_z_only = ('Z' in params and not has_xy and 'E' not in params)
-            has_e_only = ('E' in params and not has_xy and 'Z' not in params)
-
-            if has_z_only or has_e_only:
-                output_lines.append(line)
-                stats['total_output_moves'] += 1
-                current_pos['X'] += rel_dx
-                current_pos['Y'] += rel_dy
-                current_pos['Z'] += rel_dz
-                current_pos['E'] += rel_de
-                continue
-
-            abs_de = abs(rel_de)
-            n_segments = compute_segment_count(xy_dist, abs_de, max_seg_mm,
-                                               min_seg_mm, min_e_per_seg)
-
-            if n_segments <= 1:
-                output_lines.append(line)
-                stats['total_output_moves'] += 1
-                current_pos['X'] += rel_dx
-                current_pos['Y'] += rel_dy
-                current_pos['Z'] += rel_dz
-                current_pos['E'] += rel_de
-                continue
-
-            has_f = 'F' in params
-            stats['segmented_moves'] += 1
-            stats['segments_created'] += n_segments
-
-            for i in range(1, n_segments + 1):
-                seg_params = {}
-                if 'X' in params:
-                    seg_params['X'] = rel_dx / n_segments
-                if 'Y' in params:
-                    seg_params['Y'] = rel_dy / n_segments
-                if 'Z' in params:
-                    seg_params['Z'] = rel_dz / n_segments
-                if 'E' in params:
-                    seg_params['E'] = rel_de / n_segments
-                if has_f:
-                    seg_params['F'] = params['F']
-
-                include_f = (i == 1 and has_f)
-                seg_line = build_gcode_line(cmd,
-                                            seg_params,
-                                            include_f=include_f)
-                output_lines.append(seg_line + '\n')
-                stats['total_output_moves'] += 1
-
-            current_pos['X'] += rel_dx
-            current_pos['Y'] += rel_dy
-            current_pos['Z'] += rel_dz
-            current_pos['E'] += rel_de
-            continue
-
-        # --- Absolute mode (the common case for PrusaSlicer) ---
-
-        # Calculate move distance for statistics
-        dx = params.get('X', current_pos['X']) - current_pos['X']
-        dy = params.get('Y', current_pos['Y']) - current_pos['Y']
         xy_dist = calculate_xy_distance(dx, dy)
-        dz = params.get('Z', current_pos['Z']) - current_pos['Z']
         if xy_dist < 0.01 and abs(dz) > 0.01:
             xy_dist = math.sqrt(dx**2 + dy**2 + dz**2)
         stats['longest_original_mm'] = max(stats['longest_original_mm'],
                                            xy_dist)
 
-        # --- Sensor injection (absolute mode only) ---
-        # Determine if this move qualifies as a "print line"
-        this_is_print_line = (sensor_lines > 0 and cmd == 'G1'
-                              and is_print_line(params)
-                              and not logging_stopped)
+        has_xy = ('X' in params or 'Y' in params)
+        has_z_only = ('Z' in params and not has_xy and 'E' not in params)
+        has_e_only = ('E' in params and not has_xy and 'Z' not in params)
 
-        if this_is_print_line:
-            if not logging_started:
-                # Inject logging-start before the very first print line
-                output_lines.append("; --- filwidth logging start ---\n")
-                output_lines.append("M407 L1\n")  # start logging
-                logging_started = True
-
-        # Attempt segmentation
-        result = segment_move(current_pos, params, cmd, max_seg_mm, min_seg_mm,
-                              min_e_per_seg)
-
-        if result is None:
-            # Move is short enough or shouldn't be segmented
+        if has_z_only or has_e_only:
+            # Pure Z moves (layer changes) / pure E moves (retraction): never
+            # segmented and never print lines.
             output_lines.append(line)
             stats['total_output_moves'] += 1
         else:
-            stats['segmented_moves'] += 1
-            stats['segments_created'] += len(result)
-            for seg_line in result:
-                output_lines.append(seg_line + '\n')
-            stats['total_output_moves'] += len(result)
+            n_segments = compute_segment_count(xy_dist, abs(de), max_seg_mm,
+                                               min_seg_mm, min_e_per_seg)
 
-        if this_is_print_line:
-            print_line_count += 1
+            if n_segments <= 1:
+                output_lines.append(line)
+                stats['total_output_moves'] += 1
+            else:
+                stats['segmented_moves'] += 1
+                stats['segments_created'] += n_segments
+                has_f = 'F' in params
 
-            # Mid-point: disable correction after correction_lines lines
-            mid = correction_lines
-            if (mid > 0 and mid < sensor_lines and print_line_count >= mid
-                    and not correction_disabled):
-                output_lines.append(
-                    "; --- filwidth correction OFF (sensor still logging) ---\n"
-                )
-                output_lines.append(
-                    "M406\n")  # disable correction, keep measuring
-                correction_disabled = True
+                for i in range(1, n_segments + 1):
+                    t = i / n_segments
+                    seg_params = {}
+                    if 'X' in params:
+                        seg_params['X'] = (current_pos['X'] + dx * t) if absolute_xyz else dx / n_segments
+                    if 'Y' in params:
+                        seg_params['Y'] = (current_pos['Y'] + dy * t) if absolute_xyz else dy / n_segments
+                    if 'Z' in params:
+                        seg_params['Z'] = (current_pos['Z'] + dz * t) if absolute_xyz else dz / n_segments
+                    if 'E' in params:
+                        seg_params['E'] = (current_pos['E'] + de * t) if absolute_e else de / n_segments
+                    if has_f:
+                        seg_params['F'] = params['F']
 
-            # End: stop logging and dump after sensor_lines lines
-            if print_line_count >= sensor_lines and not logging_stopped:
-                output_lines.append("; --- filwidth logging stop + dump ---\n")
-                output_lines.append("M407 L0\n")  # stop logging
-                output_lines.append("M407 D\n")  # dump log over serial
-                if not correction_disabled:
-                    # No mid-point M406 was injected: disable now as well
-                    output_lines.append("M406\n")
-                logging_stopped = True
+                    include_f = (i == 1 and has_f)
+                    seg_line = build_gcode_line(cmd,
+                                                seg_params,
+                                                include_f=include_f)
+                    output_lines.append(seg_line + '\n')
+                    stats['total_output_moves'] += 1
 
-        # Update current position with whatever this move sets
-        if 'X' in params:
-            current_pos['X'] = params['X']
-        if 'Y' in params:
-            current_pos['Y'] = params['Y']
-        if 'Z' in params:
-            current_pos['Z'] = params['Z']
-        if 'E' in params:
-            current_pos['E'] = params['E']
+            if this_is_print_line:
+                inject_line_hooks()
+
+        # Update tracked position in the file's modal modes
+        if absolute_xyz:
+            if 'X' in params:
+                current_pos['X'] = params['X']
+            if 'Y' in params:
+                current_pos['Y'] = params['Y']
+            if 'Z' in params:
+                current_pos['Z'] = params['Z']
+        else:
+            current_pos['X'] += dx
+            current_pos['Y'] += dy
+            current_pos['Z'] += dz
+        if absolute_e:
+            if 'E' in params:
+                current_pos['E'] = params['E']
+        else:
+            current_pos['E'] += de
+
+    # EOF safety: if the file ended before sensor_lines print lines were seen,
+    # stop logging and dump whatever was captured (otherwise logging would run
+    # for the whole print and the buffer would just fill up).
+    if logging_started and not logging_stopped:
+        output_lines.append("; --- filwidth logging stop + dump (EOF) ---\n")
+        output_lines.append("M407 L0\n")
+        output_lines.append("M407 D\n")
 
     return output_lines, stats
 

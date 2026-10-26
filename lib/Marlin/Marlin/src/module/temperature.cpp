@@ -1704,15 +1704,6 @@ void Temperature::manage_heater() {
     }
 #endif
 
-#if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
-    /**
-     * Dynamically set the volumetric multiplier based
-     * on the delayed Filament Width measurement.
-     * (I2C sensor path handles this in the planner instead.)
-     */
-    filwidth.update_volumetric();
-#endif
-
 #if HAS_HEATED_BED
 
     #if ENABLED(THERMAL_PROTECTION_BED)
@@ -2354,11 +2345,7 @@ void Temperature::updateTemperaturesFromRawValues() {
     redundant_temperature = analog_to_celsius_hotend(redundant_temperature_raw, 1);
 #endif
 #if ENABLED(FILAMENT_WIDTH_SENSOR)
-    #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
     filwidth.service_update();
-    #else
-    filwidth.update_measured_mm();
-    #endif
 #endif
 #if HAS_TEMP_BOARD
     temp_board.celsius = analog_to_celsius_board(temp_board.raw);
@@ -2576,9 +2563,6 @@ void Temperature::init() {
 #endif
 #if HAS_TEMP_HEATBREAK
     HAL_ANALOG_SELECT(TEMP_HEATBREAK_PIN);
-#endif
-#if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
-    HAL_ANALOG_SELECT(FILWIDTH_PIN);
 #endif
 #if HAS_ADC_BUTTONS
     HAL_ANALOG_SELECT(ADC_KEYPAD_PIN);
@@ -3253,11 +3237,6 @@ void Temperature::readings_ready() {
     if (!temp_meas_ready) {
         set_current_temp_raw();
     }
-
-// Filament Sensor - update filtered values for ADC-based sensors
-#if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
-    filwidth.reading_ready();
-#endif
 
 #if HOTENDS
     HOTEND_LOOP()
@@ -3970,24 +3949,11 @@ void Temperature::isr() {
 #endif
 
 #if ENABLED(FILAMENT_WIDTH_SENSOR)
-    #if ENABLED(FILWIDTH_SENSOR_USE_I2C)
     case Prepare_FILWIDTH:
         break;
     case Measure_FILWIDTH:
         filwidth.schedule_update();
         break;
-    #else
-    case Prepare_FILWIDTH:
-        HAL_START_ADC(FILWIDTH_PIN);
-        break;
-    case Measure_FILWIDTH:
-        if (!HAL_ADC_READY()) {
-            next_sensor_state = adc_sensor_state; // redo this state
-        } else {
-            filwidth.accumulate(HAL_READ_ADC());
-        }
-        break;
-    #endif
 #endif
 
 #if HAS_JOY_ADC_X

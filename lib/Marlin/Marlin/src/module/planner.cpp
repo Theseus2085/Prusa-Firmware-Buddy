@@ -1433,21 +1433,36 @@ bool Planner::_populate_block(block_t *const block,
         if (FilamentWidthSensor::correction_enabled) {
             planner.apply_filament_width_sensor(size_ratio);
         }
-
-        if (FilamentWidthSensor::logging && FilamentWidthSensor::log_count < FilamentWidthSensor::log_capacity) {
-            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].x = target_float.x;
-            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].y = target_float.y;
-            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].vol_mult = planner.volumetric_multiplier[extruder];
-            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].exp_area = FilamentWidthSensor::nominal_area;
-            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].meas_area = FilamentWidthSensor::last_average_area;
-            FilamentWidthSensor::log_array[FilamentWidthSensor::log_count].meas_dia = 2.0f * sqrtf(FilamentWidthSensor::last_average_area / (float)PI);
-            FilamentWidthSensor::log_count++;
-        }
     }
     #endif
 
     const float e_msteps_float = de * e_factor[extruder];
     const uint32_t e_msteps = ABS(e_msteps_float) + 0.5f;
+
+    #if ENABLED(FILAMENT_WIDTH_SENSOR)
+    // Capture the log entry after e_msteps is known so each record carries both
+    // the uncorrected (de) and the corrected (e_msteps) step count.
+    if (filwidth.enabled && de && FilamentWidthSensor::logging) {
+        if (FilamentWidthSensor::log_count < FilamentWidthSensor::log_capacity) {
+            FilLogEntry &entry = FilamentWidthSensor::log_array[FilamentWidthSensor::log_count];
+            entry.time_ms      = millis();
+            entry.x            = target_float.x;
+            entry.y            = target_float.y;
+            entry.e_factor     = e_factor[extruder];
+            entry.msteps_raw   = de;
+            entry.msteps_corr  = e_msteps;
+            entry.axis_a_mm    = FilamentWidthSensor::latest_axes_mm[0];
+            entry.axis_b_mm    = FilamentWidthSensor::latest_axes_mm[1];
+            entry.ellipse_area = FilamentWidthSensor::last_average_area;
+            FilamentWidthSensor::log_count++;
+        }
+        else {
+            // Buffer full (host not draining fast enough): discard the entry and
+            // account for it - never block or wrap here, this is planner context.
+            FilamentWidthSensor::log_dropped++;
+        }
+    }
+    #endif
 #else
     constexpr uint32_t e_msteps = 0;
 #endif

@@ -709,6 +709,21 @@ MI_INFO_SIDE_FILL_SENSOR::MI_INFO_SIDE_FILL_SENSOR()
     #include "../lib/Marlin/Marlin/src/feature/filwidth.h"
 
 /*****************************************************************************/
+// MI_FILWIDTH_ENABLE
+MI_FILWIDTH_ENABLE::MI_FILWIDTH_ENABLE()
+    : WI_ICON_SWITCH_OFF_ON_t(filwidth.enabled, _(label), nullptr, is_enabled_t::yes, is_hidden_t::no) {
+}
+
+void MI_FILWIDTH_ENABLE::OnChange(size_t) {
+    // Route through the gcode queue so the marlin task performs the switch
+    // (same code path as M405 / M406 S0) instead of touching filwidth state
+    // directly from the GUI task.
+    if (!gui_try_gcode_with_msg(value() ? "M405" : "M406 S0")) {
+        set_value(!value(), false); // queue full -> revert the switch visuals
+    }
+}
+
+/*****************************************************************************/
 // MI_INFO_FILWIDTH_RAW
 MI_INFO_FILWIDTH_RAW::MI_INFO_FILWIDTH_RAW()
     : MenuItemAutoUpdatingLabel(_("Filwidth Sensor"), "%.3f mm",

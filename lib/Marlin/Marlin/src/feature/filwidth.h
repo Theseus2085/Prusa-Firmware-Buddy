@@ -24,68 +24,73 @@
 #include "../inc/MarlinConfig.h"
 #include "../module/planner.h"
 
-#if ENABLED(FILAMENT_WIDTH_SENSOR) && DISABLED(FILWIDTH_SENSOR_USE_I2C)
-  #error "FILAMENT_WIDTH_SENSOR now requires FILWIDTH_SENSOR_USE_I2C"
+// The external I2C sensor module is the only supported filament width sensor.
+#ifndef FILWIDTH_SENSOR_QUEUE_BIN_MM
+  #define FILWIDTH_SENSOR_QUEUE_BIN_MM 1
 #endif
-
-#if ENABLED(FILWIDTH_SENSOR_USE_I2C)
-  #ifndef FILWIDTH_SENSOR_QUEUE_BIN_MM
-    #define FILWIDTH_SENSOR_QUEUE_BIN_MM 1
-  #endif
-  #ifndef FILWIDTH_SENSOR_MAX_DELAY_MM
-    #define FILWIDTH_SENSOR_MAX_DELAY_MM ((MAX_MEASUREMENT_DELAY * 10) + int(FILWIDTH_SENSOR_SPACING_MM + 0.5f))
-  #endif
-  #ifndef FILWIDTH_SENSOR_QUEUE_CAPACITY
-    #define FILWIDTH_SENSOR_QUEUE_CAPACITY ((FILWIDTH_SENSOR_MAX_DELAY_MM / FILWIDTH_SENSOR_QUEUE_BIN_MM) + 8)
-  #endif
-  #ifndef FILWIDTH_SENSOR_READY_RETRIES
-    #define FILWIDTH_SENSOR_READY_RETRIES 3
-  #endif
-  #ifndef FILWIDTH_SENSOR_POLL_INTERVAL_MS
-    #define FILWIDTH_SENSOR_POLL_INTERVAL_MS 250UL
-  #endif
-  #ifndef FILWIDTH_SENSOR_WARN_INTERVAL_MS
-    #define FILWIDTH_SENSOR_WARN_INTERVAL_MS 3000UL
-  #endif
-  #ifndef FILWIDTH_SENSOR_RX_PRINT_INTERVAL_MS
-    #define FILWIDTH_SENSOR_RX_PRINT_INTERVAL_MS 5000UL
-  #endif
-  #ifndef FILWIDTH_SENSOR1_OFFSET_MM
-    #define FILWIDTH_SENSOR1_OFFSET_MM (MEASUREMENT_DELAY_CM * 10.0f)
-  #endif
-  #ifndef FILWIDTH_SENSOR_SPACING_MM
-    #define FILWIDTH_SENSOR_SPACING_MM 1.0f
-  #endif
-  #ifndef FILWIDTH_SENSOR2_OFFSET_MM
-    #define FILWIDTH_SENSOR2_OFFSET_MM (FILWIDTH_SENSOR1_OFFSET_MM + FILWIDTH_SENSOR_SPACING_MM)
-  #endif
+#ifndef FILWIDTH_SENSOR_MAX_DELAY_MM
+  #define FILWIDTH_SENSOR_MAX_DELAY_MM ((MAX_MEASUREMENT_DELAY * 10) + int(FILWIDTH_SENSOR_SPACING_MM + 0.5f))
 #endif
+#ifndef FILWIDTH_SENSOR_QUEUE_CAPACITY
+  #define FILWIDTH_SENSOR_QUEUE_CAPACITY ((FILWIDTH_SENSOR_MAX_DELAY_MM / FILWIDTH_SENSOR_QUEUE_BIN_MM) + 8)
+#endif
+#ifndef FILWIDTH_SENSOR_READY_RETRIES
+  #define FILWIDTH_SENSOR_READY_RETRIES 3
+#endif
+#ifndef FILWIDTH_SENSOR_POLL_INTERVAL_MS
+  #define FILWIDTH_SENSOR_POLL_INTERVAL_MS 250UL
+#endif
+#ifndef FILWIDTH_SENSOR_WARN_INTERVAL_MS
+  #define FILWIDTH_SENSOR_WARN_INTERVAL_MS 3000UL
+#endif
+#ifndef FILWIDTH_SENSOR_RX_PRINT_INTERVAL_MS
+  #define FILWIDTH_SENSOR_RX_PRINT_INTERVAL_MS 5000UL
+#endif
+#ifndef FILWIDTH_SENSOR1_OFFSET_MM
+  #define FILWIDTH_SENSOR1_OFFSET_MM (MEASUREMENT_DELAY_CM * 10.0f)
+#endif
+#ifndef FILWIDTH_SENSOR_SPACING_MM
+  #define FILWIDTH_SENSOR_SPACING_MM 1.0f
+#endif
+#ifndef FILWIDTH_SENSOR2_OFFSET_MM
+  #define FILWIDTH_SENSOR2_OFFSET_MM (FILWIDTH_SENSOR1_OFFSET_MM + FILWIDTH_SENSOR_SPACING_MM)
+#endif
+#ifndef FILWIDTH_SENSOR_PROTOCOL_VERSION
+  #define FILWIDTH_SENSOR_PROTOCOL_VERSION 0x01
+#endif
+#ifndef FILWIDTH_SENSOR_MAX_RATIO_PERCENT
+  #define FILWIDTH_SENSOR_MAX_RATIO_PERCENT 20.0f
+#endif
+#ifndef FILWIDTH_SENSOR_MAX_CONSECUTIVE_FAILURES
+  #define FILWIDTH_SENSOR_MAX_CONSECUTIVE_FAILURES 8
+#endif
+  #ifndef FILWIDTH_SENSOR_RECOVERY_INTERVAL_MS
+    #define FILWIDTH_SENSOR_RECOVERY_INTERVAL_MS 2000UL
+  #endif
+  #ifndef FILWIDTH_SENSOR_LOG_FLUSH_BATCH
+    #define FILWIDTH_SENSOR_LOG_FLUSH_BATCH 16
+  #endif
 
 struct FilLogEntry {
-  float x;
-  float y;
-  float vol_mult;
-  float exp_area;
-  float meas_area;
-  float meas_dia;
+  uint32_t time_ms;      ///< millis() when the planner block was populated
+  float x;               ///< target X of the block (mm)
+  float y;               ///< target Y of the block (mm)
+  float e_factor;        ///< applied E factor (flow * volumetric multiplier)
+  int32_t msteps_raw;    ///< uncorrected E msteps requested by the block (de)
+  uint32_t msteps_corr;  ///< corrected E msteps as executed (de * e_factor, rounded)
+  float axis_a_mm;       ///< axis 1 diameter at the nozzle when the block was planned
+  float axis_b_mm;       ///< axis 2 diameter at the nozzle when the block was planned
+  float ellipse_area;    ///< length-weighted average cross-section area over the block (mm^2)
 };
 
 class FilamentWidthSensor {
 public:
-  static constexpr int MMD_CM = MAX_MEASUREMENT_DELAY + 1;
-  static constexpr int MMD_MM = MMD_CM * 10;
-
   static bool enabled;              // (M405-M406) Filament Width Sensor ON/OFF.
   static bool correction_enabled;   // (M406) Apply the sensor correction to e_factor. Sensor keeps measuring when false.
   static float nominal_mm;          // Nominal filament width
   static float measured_mm;         // Measured filament diameter (equivalent diameter for ellipse)
   static float nominal_area;        // Reference ellipse area for nominal filament
-  static float e_count;             // Extruder movement accumulator
-  static float delay_dist;          // Running distance through the delay buffer
-  static uint8_t meas_delay_cm;     // Distance delay setting
-  static float ratios[MMD_CM];      // Ring buffer to delay measurement. (Extruder factor minus 100)
-  static int8_t index_r;            // Index into ring buffer for reading
-  static int8_t index_w;            // Index into ring buffer for writing
+  static uint8_t meas_delay_cm;     // Distance delay setting (sensor 1 offset from the nozzle)
 
   static constexpr uint8_t sensor_count = 2;
 
@@ -107,10 +112,23 @@ public:
   static float latest_axes_mm[sensor_count]; ///< Most recently popped aligned samples
   static float last_average_area;            ///< Most recently computed average integral area
 
-  static constexpr uint16_t log_capacity = 1000;
+  // RAM budget: entry = 36 bytes. 650 entries = ~23.4 KB, matching the budget the
+  // mk4 release+boot build tolerated with the old 1000x24B layout (larger values
+  // caused heap exhaustion mid-print). Entries are streamed out in small batches
+  // by flush_log() from the main loop (never from the planner), so the buffer is
+  // a shock absorber, not long-term storage.
+  static constexpr uint16_t log_capacity = 650;
   static FilLogEntry log_array[log_capacity];
   static uint16_t log_count;
+  static uint16_t log_dropped;   // entries discarded because the buffer was full
   static bool logging;
+
+  /**
+   * @brief Streams up to max_entries buffered log rows out over serial (FWLOG lines).
+   * @return Number of entries actually flushed.
+   * Must be called from the main loop (marlin task), never from the planner.
+   */
+  static uint16_t flush_log(uint16_t max_entries);
 
   /**
    * @brief Pushes a raw sensor measurement into the spatial alignment queue.
@@ -180,21 +198,20 @@ public:
   static float get_averaged_size_ratio(float extrude_mm);
 
   /**
+   * @brief Comm-watchdog action: falls back to nominal extrusion after sustained I2C failures.
+   */
+  static void trip_watchdog();
+
+  /**
+   * @brief Restores correction after the sensor answers again (only if the watchdog took it away).
+   */
+  static void handle_watchdog_recovery();
+
+  /**
    * @brief Tracks the physical movement of the filament, triggering queue pops and integration.
    * @param e_move The physical distance the extruder motor moved.
    */
   static void advance_e(const float &e_move);
-#if DISABLED(FILWIDTH_SENSOR_USE_I2C)
-  static inline void update_volumetric() {
-    if (enabled) {
-      int8_t read_index = index_r;
-      read_index -= meas_delay_cm;
-      if (read_index < 0) read_index += MMD_CM; // Loop around buffer if needed
-      LIMIT(read_index, 0, MAX_MEASUREMENT_DELAY);
-      planner.apply_filament_width_sensor(ratios[read_index]);
-    }
-  }
-#endif
 
 private:
   static inline float get_area_mm2(const float major_mm, const float minor_mm) {

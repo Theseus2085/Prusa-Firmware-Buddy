@@ -61,6 +61,7 @@ struct ScreenMenuSensorInfo__<std::index_sequence<hotend...>> {
 #else
 
     #if ENABLED(FILAMENT_WIDTH_SENSOR)
+        MI_FILWIDTH_ENABLE,
         MI_INFO_FILWIDTH_RAW,
         MI_INFO_OVALITY_SENSOR,
         MI_INFO_OVALITY_SENSOR_AVG,
