@@ -22,3 +22,6 @@ __pycache__
 .venv
 *.egg-info/
 *.egg
+
+# test print session data (raw logs, CSVs, graphs) - not source
+testprint_sessions/

@@ -1,10 +1,10 @@
 ﻿#!/usr/bin/env python3
 """
-segment_gcode.py â€” G-Code Segment Splitter for Filament Width Sensor Optimization
+segment_gcode.py - G-Code Segment Splitter for Filament Width Sensor Optimization
 
 Prevents long linear moves (G0/G1) from monopolizing the Marlin planner block
 buffer. A single 200mm infill line becomes one planner block that executes for
-~2s at 100mm/s â€” during which no new filament width sensor correction can be
+~2s at 100mm/s - during which no new filament width sensor correction can be
 applied. This script splits such moves into shorter sub-segments.
 
 Segmentation strategy:
@@ -19,11 +19,16 @@ Sensor logging injection:
     - Injects M407 L1 before the 1st detected print line to start logging.
       (The sensor itself is assumed to already be enabled at print start.)
     - Injects M406 after line --correction-lines (default 8) to disable
-      correction only â€” the sensor keeps measuring and logging.
+      correction only - the sensor keeps measuring and logging.
     - Injects M407 L0 + M407 D after the last logged line.
   A "print line" is any G1 move that has both XY travel and extrusion (E).
   Set --correction-lines equal to --sensor-lines (or 0) to keep correction
   on for all logged lines (no mid-point M406).
+  Use a very large --sensor-lines (e.g. 1000000) to log the WHOLE print;
+  the M407 L0 + M407 D stop sequence is then appended at end of file.
+
+Only the code part of a line (before ';') is parsed, so inline comments
+cannot inject fake coordinates.
 
 Usage as PrusaSlicer post-processor:
     "C:\\path\\to\\python.exe" "C:\\path\\to\\segment_gcode.py" --max-segment-mm 25
@@ -44,29 +49,40 @@ import time
 # ---------------------------------------------------------------------------
 # Version
 # ---------------------------------------------------------------------------
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # ---------------------------------------------------------------------------
-# G-code parameter regex â€” matches e.g. "X123.456", "E-0.800", "F3600"
+# G-code parameter regex - matches e.g. "X123.456", "E-0.800", "F3600"
+# (case-insensitive with keys normalized to upper case: G-code itself is not
+# case-sensitive and some tools emit lowercase 'g1 x100 e8')
 # ---------------------------------------------------------------------------
-_PARAM_RE = re.compile(r'([XYZEF])([-+]?\d*\.?\d+)')
+_PARAM_RE = re.compile(r'([XYZEF])([-+]?\d*\.?\d+)', re.IGNORECASE)
 
-# G-command regex â€” matches G0 or G1 (case-insensitive, with optional spaces)
+# G-command regex - matches G0 or G1 (case-insensitive, with optional spaces)
 _GCMD_RE = re.compile(r'^[Gg]\s*([01])\b')
 
 # Matches "G92 ..." (but not G92.1) - coordinate system reset
 _G92_RE = re.compile(r'^G92(\s|$)')
 
 
+def strip_comment(line: str) -> str:
+    """Return the code part of a line (everything before an unquoted ';')."""
+    idx = line.find(';')
+    return line if idx < 0 else line[:idx]
+
+
 def parse_gcode_params(line: str) -> dict:
     """Extract G-code parameters from a line into a dict.
+
+    Only the code part (before any inline ';'-comment) is parsed, so a comment
+    like "; Y200 reference" cannot inject a fake coordinate.
 
     Returns e.g. {'X': 100.0, 'Y': 50.0, 'E': 1.234, 'F': 3600.0}
     Only parameters present in the line are included.
     """
     params = {}
-    for match in _PARAM_RE.finditer(line):
-        params[match.group(1)] = float(match.group(2))
+    for match in _PARAM_RE.finditer(strip_comment(line)):
+        params[match.group(1).upper()] = float(match.group(2))
     return params
 
 
@@ -119,7 +135,7 @@ def compute_segment_count(xy_dist: float, abs_de: float, max_seg_mm: float,
                           min_seg_mm: float, min_e_per_seg: float) -> int:
     """Determine the optimal number of sub-segments for a move.
 
-    Primary criterion: XY distance / max_seg_mm  â†’ how many segments we'd want.
+    Primary criterion: XY distance / max_seg_mm  -> how many segments we'd want.
     Guard #1 (XY floor): Each segment must be >= min_seg_mm in XY.
     Guard #2 (E floor):  For extrusion moves, each segment must consume
                          >= min_e_per_seg mm of filament so the sensor has
@@ -147,7 +163,7 @@ def compute_segment_count(xy_dist: float, abs_de: float, max_seg_mm: float,
 
     # Guard #2: E distance per segment must meet the sensor minimum.
     # Only applies when there is actual extrusion (abs_de > 0).
-    # Travel moves (abs_de == 0) skip this check â€” they have no sensor
+    # Travel moves (abs_de == 0) skip this check - they have no sensor
     # interaction and should still be split to free up the planner.
     if abs_de > 0.0 and min_e_per_seg > 0.0:
         while n > 1 and (abs_de / n) < min_e_per_seg:
@@ -176,7 +192,7 @@ def process_gcode(input_lines: list,
         max_seg_mm:       Target maximum XY segment length
         min_seg_mm:       Minimum XY segment length
         min_e_per_seg:    Minimum filament per segment (mm)
-        sensor_lines:     Total number of print lines to log (M407 L1 â€¦ L0 D).
+        sensor_lines:     Total number of print lines to log (M407 L1 ... L0 D).
                           0 = disabled.
         correction_lines: After this many lines, inject M406 to disable
                           correction while keeping logging active.
@@ -445,13 +461,13 @@ def main():
         "creating sub-segments below the sensor's spatial resolution.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="PrusaSlicer appends the G-code file path as the last "
-        "positional argument automatically.\n\n"
-        "Typical filament consumption per mm of XY travel:\n"
-        "  0.2mm layer, 0.45mm width, 1.75mm filament â†’ ~0.037 mm E / mm XY\n"
-        "  0.3mm layer, 0.45mm width, 1.75mm filament â†’ ~0.056 mm E / mm XY\n\n"
-        "At --max-segment-mm 25:\n"
-        "  0.2mm layer â†’ ~0.94 mm E/segment (â‰ˆ1 sensor bin)\n"
-        "  0.3mm layer â†’ ~1.40 mm E/segment (>1 sensor bin)\n")
+               "positional argument automatically.\n\n"
+               "Typical filament consumption per mm of XY travel:\n"
+               "  0.2mm layer, 0.45mm width, 1.75mm filament -> ~0.037 mm E / mm XY\n"
+               "  0.3mm layer, 0.45mm width, 1.75mm filament -> ~0.056 mm E / mm XY\n\n"
+               "At --max-segment-mm 25:\n"
+               "  0.2mm layer -> ~0.94 mm E/segment (~1 sensor bin)\n"
+               "  0.3mm layer -> ~1.40 mm E/segment (>1 sensor bin)\n")
     parser.add_argument(
         'gcode_file',
         help="Path to the G-code file to process (modified in-place)")
@@ -465,7 +481,7 @@ def main():
         '--min-segment-mm',
         type=float,
         default=5.0,
-        help="Minimum XY segment length in mm â€” prevents tiny fragments. "
+        help="Minimum XY segment length in mm - prevents tiny fragments. "
         "(default: 5.0)")
     parser.add_argument(
         '--min-e-per-segment-mm',
