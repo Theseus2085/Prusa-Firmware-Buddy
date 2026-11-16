@@ -193,8 +193,12 @@ if(${BOARD} STREQUAL "DWARF"
       CACHE BOOL "Enable Connect client"
       )
 else()
+  # Sensor fork: PrusaConnect disabled by default. With Connect registered on
+  # the printer, its TLS boot path (mbedtls) exhausts the remaining newlib
+  # heap and BSODs at startup (observed on 6.3.3-SENS1+10101: "Out of heap
+  # memory" in task:startup + connectTask stack overflow in ctr_drbg_reseed).
   set(CONNECT
-      "YES"
+      "NO"
       CACHE BOOL "Enable Connect client"
       )
 endif()
