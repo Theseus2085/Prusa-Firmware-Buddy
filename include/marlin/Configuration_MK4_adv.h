@@ -2129,7 +2129,7 @@
     #define FILWIDTH_SENSOR_MAX_RATIO_PERCENT 20.0f // Hard safety cap on the applied volumetric correction (percent)
     #define FILWIDTH_SENSOR_MAX_CONSECUTIVE_FAILURES 8 // Failed polls (x poll interval) before the comm watchdog disables correction
     #define FILWIDTH_SENSOR_RECOVERY_INTERVAL_MS 2000UL // Probe cadence while the comm watchdog is tripped
-    #define FILWIDTH_SENSOR_LOG_FLUSH_BATCH 16 // Max log rows streamed out per temperature-loop pass (~6 Hz)
+    #define FILWIDTH_SENSOR_LOG_FLUSH_BATCH 48 // Max log rows streamed out per temperature-loop pass; 48 @ ~6 Hz outdrains worst-case block rates at 80 % max print speed
 
     #define FILWIDTH_ERROR_MARGIN 0.6 // (mm) If a measurement differs too much from nominal width ignore it
     #define MAX_MEASUREMENT_DELAY 22 // (bytes) Buffer size for stored measurements (1 byte per cm). Must be larger than MEASUREMENT_DELAY_CM.

@@ -68,7 +68,7 @@
     #define FILWIDTH_SENSOR_RECOVERY_INTERVAL_MS 2000UL
   #endif
   #ifndef FILWIDTH_SENSOR_LOG_FLUSH_BATCH
-    #define FILWIDTH_SENSOR_LOG_FLUSH_BATCH 16
+    #define FILWIDTH_SENSOR_LOG_FLUSH_BATCH 48
   #endif
 
 struct FilLogEntry {
@@ -112,12 +112,15 @@ public:
   static float latest_axes_mm[sensor_count]; ///< Most recently popped aligned samples
   static float last_average_area;            ///< Most recently computed average integral area
 
-  // RAM budget: entry = 36 bytes. 650 entries = ~23.4 KB, matching the budget the
-  // mk4 release+boot build tolerated with the old 1000x24B layout (larger values
-  // caused heap exhaustion mid-print). Entries are streamed out in small batches
-  // by flush_log() from the main loop (never from the planner), so the buffer is
-  // a shock absorber, not long-term storage.
-  static constexpr uint16_t log_capacity = 650;
+  // RAM budget: entry = 36 bytes. Sized from print-speed analysis at 80 % of MK4
+  // maximum (200 mm/s path, ~17 mm3/s => 7 mm/s filament feed):
+  //   - segmented moves (>=1 mm E/segment): <= 7 entries/s
+  //   - slicer-native curve/detail bursts:   up to ~400 entries/s
+  //   - flush drain (batch 48 @ ~6.1 Hz):    ~293 entries/s > sustained worst case
+  //   - buffer only bridges one flush interval (~66) + ~1 s host stall (200)
+  // => 200 entries (7.2 KB). Larger buffers starve the newlib heap (PrusaConnect
+  //    TLS needs the RAM at boot).
+  static constexpr uint16_t log_capacity = 200;
   static FilLogEntry log_array[log_capacity];
   static uint16_t log_count;
   static uint16_t log_dropped;   // entries discarded because the buffer was full
