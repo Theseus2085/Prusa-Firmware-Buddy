@@ -95,6 +95,12 @@ if(${BOARD} STREQUAL "XL_DEV_KIT_XLB")
       CACHE BOOL "Enable Web User Interface"
       )
 else()
+  # Sensor fork note: setting WUI=NO would free the lwIP/network statics
+  # (~11 KB bss + task buffers) for the filwidth heap budget, but the MK4
+  # build does not currently compile without the network stack:
+  # fsm_network_setup.cpp, ini_handler.cpp and marlin_server.cpp include
+  # netdev.h/wui_api.h/wui.h without BUDDY_ENABLE_WUI() guards. It stays
+  # enabled; PrusaConnect (the boot-time heap consumer) is disabled instead.
   set(WUI
       "YES"
       CACHE BOOL "Enable Web User Interface"
