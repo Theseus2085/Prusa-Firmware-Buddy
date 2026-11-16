@@ -278,6 +278,75 @@ out, st = run(gcode, sensor_lines=3, correction_lines=0)
 flat = '\n'.join(out)
 check("I12 single stop sequence", flat.count("M407 L0") == 1 and flat.count("M407 D") == 1)
 
+# I13 multi-object layer-wise: two islands per layer, travels in between;
+# print-line counting runs continuously across objects
+gcode = ["G90\n", "M83\n",
+         "G1 X10 Y10 E0.4\n",   # object 1
+         "G1 X20 Y10 E0.4\n",
+         "G0 X100 Y100\n",      # travel to object 2 (no retraction modelled)
+         "G1 X110 Y100 E0.4\n", # object 2
+         "G1 X120 Y100 E0.4\n"]
+out, st = run(gcode, sensor_lines=4, correction_lines=0)
+flat = '\n'.join(out)
+check("I13 multi-object: L1 before obj1, stop after 4th print line overall",
+      out.index("M407 L1") < out.index("G1 X10 Y10 E0.4")
+      and out[out.index("; --- filwidth logging stop + dump ---") - 1] == "G1 X120 Y100 E0.4"
+      and st['segmented_moves'] >= 1,  # inter-object travel gets split too
+      flat)
+
+# I14a by-object (sequential) transition, PrusaSlicer-style with RELATIVE
+# clearance move between objects: wipe/lift in G91, then back to G90.
+# Object 2 restarts at low Z; E tracking must stay consistent.
+gcode = ["G90\n", "M83\n",
+         "G1 X10 Y10 Z0.2 E0.4\n",
+         "G1 X60 Y10 E0.8\n",           # object 1, long move -> segmented
+         "G1 E-2 F2400\n",              # retract
+         "G91\n",                       # relative clearance move
+         "G1 Z10 F600\n",
+         "G1 X-100 Y50\n",
+         "G90\n",
+         "G1 Z0.2 F600\n",              # object 2, layer 1 again
+         "G1 E2 F2400\n",               # prime
+         "G1 X200 Y60 E0.8\n",          # object 2 print (long -> segmented)
+         "G1 X210 Y60 E0.4\n"]
+out, st = run(gcode, sensor_lines=100, correction_lines=0)
+m = moves(out)
+e_moves = [l for l in m if 'E' in sg.parse_gcode_params(l)]
+# obj1 long move (50mm, E0.8): E-guard keeps it whole; obj2 reached exactly at
+# X200; EOF flush fires at end of file (full-print logging semantics)
+check("I14a by-object rel transition: modal modes + EOF flush intact",
+      "G1 X60 Y10 E0.8" in m                                        # obj1 long move kept whole by E-guard
+      and any(sg.parse_gcode_params(l).get('X') == 200.0 for l in e_moves)  # obj2 reached exactly
+      and "M407 L1" in out and "M407 L0" in out,    # EOF stop sequence
+      '\n'.join(out))
+
+# I14b same but with ABSOLUTE inter-object travel (some slicer versions)
+gcode = ["G90\n", "M83\n",
+         "G1 X10 Y10 E0.4\n",
+         "G1 E-2 F2400\n",
+         "G1 Z10 F600\n",
+         "G0 X200 Y60\n",
+         "G1 Z0.2 F600\n",
+         "G1 E2 F2400\n",
+         "G1 X250 Y60 E1.2\n"]
+out, st = run(gcode, sensor_lines=100, correction_lines=0)
+m = moves(out)
+o2 = sg.parse_gcode_params(m[-1]) if 'E' in sg.parse_gcode_params(m[-1]) else {}
+check("I14b by-object abs transition: obj2 target exact",
+      o2.get('X') == 250.0 and o2.get('E') == 1.2, str(m))
+
+# I15 filament change (M600) mid-print: M-code passed through, E continuity
+# afterwards maintained (Marlin keeps absolute E across M600 in gcode terms)
+gcode = ["G90\n", "M82\n",
+         "G1 X10 E5\n",
+         "M600\n",
+         "G1 E-2 F2400\n",   # retract after change
+         "G1 X60 E7\n"]      # de must be 2 (E origin unchanged)
+out, st = run(gcode)
+m = moves(out)
+check("I15 M600 passthrough + E continuity",
+      "M600" in out and any(l.startswith("G1 X60") for l in m), str(out))
+
 # ===========================================================================
 print("== C: CLI subprocess ==")
 
