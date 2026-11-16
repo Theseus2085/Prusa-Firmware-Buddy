@@ -28,7 +28,9 @@ Sensor logging injection:
   the M407 L0 + M407 D stop sequence is then appended at end of file.
 
 Only the code part of a line (before ';') is parsed, so inline comments
-cannot inject fake coordinates.
+cannot inject fake coordinates. Binary G-code (bgcode, PrusaSlicer 2.9+
+default for the MK4) is DETECTED and rejected - processing it as text
+would corrupt the file on write-back.
 
 Usage as PrusaSlicer post-processor:
     "C:\\path\\to\\python.exe" "C:\\path\\to\\segment_gcode.py" --max-segment-mm 25
@@ -49,7 +51,7 @@ import time
 # ---------------------------------------------------------------------------
 # Version
 # ---------------------------------------------------------------------------
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 # ---------------------------------------------------------------------------
 # G-code parameter regex - matches e.g. "X123.456", "E-0.800", "F3600"
@@ -541,6 +543,19 @@ def main():
     if not os.path.isfile(gcode_path):
         print(f"ERROR: File not found: {gcode_path}", file=sys.stderr)
         sys.exit(1)
+
+    # Refuse binary G-code: reading it as text with errors='replace' and
+    # writing it back would silently corrupt the file.
+    with open(gcode_path, 'rb') as f:
+        raw = f.read()
+    if b'\x00' in raw or b'GCDE' in raw:
+        print(f"ERROR: {gcode_path} appears to be BINARY G-code (bgcode). "
+              "Re-slice with plain text output: PrusaSlicer CLI needs "
+              "--binary-gcode=0 (2.9+ defaults to binary for the MK4), in the "
+              "GUI uncheck 'Enable binary G-code'. This script only processes "
+              "plain text G-code.", file=sys.stderr)
+        sys.exit(1)
+    del raw
 
     # Read the input file
     print(f"[segment_gcode] Reading: {gcode_path}")

@@ -379,6 +379,17 @@ with tempfile.TemporaryDirectory() as td:
                        capture_output=True, text=True)
     check("C5 missing file rejected", r.returncode == 1, r.stdout + r.stderr)
 
+    # binary G-code must be rejected WITHOUT modifying the file
+    bin_g = os.path.join(td, "bin.gcode")
+    blob = b"; header\nGCDE\x01\x00\x00\x00\x01\x00B\x00\x00\x00\x00Producer=X\n"
+    with open(bin_g, 'wb') as f:
+        f.write(blob)
+    r = subprocess.run([sys.executable, os.path.abspath(sg.__file__), bin_g],
+                       capture_output=True, text=True)
+    check("C6 binary gcode rejected, file untouched",
+          r.returncode == 1 and "BINARY" in r.stderr
+          and open(bin_g, 'rb').read() == blob, r.stderr[:120])
+
 # ===========================================================================
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
