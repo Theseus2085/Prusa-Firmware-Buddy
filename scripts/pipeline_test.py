@@ -590,6 +590,64 @@ check("T17 alle 10.000 Korrekturen endlich, keine Entartung", finite)
 check("T17 Queue-Konsistenz nach 10.000 Schritten",
       m.size[0] <= m.cap and m.size[1] <= m.cap and float(m.pos) == 10000.0)
 
+# --- T18: Kaltstart-Semantik (Warm-up-Phase) ----------------------------------------
+# Nachvollzug des Testdrucks 2026-11-16: die Korrektur bleibt nach einem echten
+# Kaltstart (leere Queues, pos=0) SOLANGE auf 0 % (ef=1.00), bis die erste
+# Sample-Zielposition (pos+140 bzw. pos+213.8) erreicht ist — das Lookahead-
+# Integral edge-holdet auf latest_axes, und latest_axes ist POP-basiert
+# (Initialwert: nominal), NICHT der aktuelle Sensorframe. Erst ab pos>=140
+# fliesst Achse-A-Historie, ab pos>=213.8 auch Achse B. Beim Testdruck war die
+# Pipe durch die Laderoutine des Druckers (~140 mm getracktes E) vorbefuellt,
+# deshalb waren die Uebergaenge schon im/fruehen Druck sichtbar.
+print("\nT18: Kaltstart — Korrektur inaktiv bis erster Pop, dann Historie-basiert")
+m = make_new()
+
+def cold_step(a_mm, b_mm):
+    m.advance_e(f32(1.0))
+    m.handle_frame(build_frame(a_mm, b_mm, with_crc=True))
+    return m.get_averaged_size_ratio(f32(1.0))
+
+def ratio_of(a, b):
+    return float(clamp_ratio(f32(f32(f32(NOMINAL_AREA / get_area_mm2(a, b)) * f32(100.0)) - f32(100.0))))
+
+# Phase 1: pos 1..10, Sensor liefert 1.60/1.60. Keine Queue-Abdeckung im Block-
+# Bereich -> Edge-Hold auf latest_axes (= nominal-Init, NICHT aktueller Frame)
+# -> Korrektur 0 % (ef bleibt 1.00): der Drucker druckt unkorigiert weiter.
+r_first = None
+for _ in range(10):
+    r = cold_step(f32(1.60), f32(1.60))
+    if r_first is None: r_first = r
+check("T18 Kaltstart: Korrektur 0 % (latest=nominial, kein Pop)",
+      abs(float(r_first)) < 1e-6 and abs(float(r)) < 1e-6,
+      f"erste={float(r_first):.4f}, letzte={float(r):.4f}")
+
+# Phase 2: Pipe konsequent mit 1.60/1.60 fuellen, bis Achse-A-Ziele in den
+# Blockbereich fallen (pos >= ~141): ab da A aus der Historie (1.60), B noch
+# auf nominal-Init (1.75) -> Mischratio grob zwischen 0 % und dem A-Wert
+while m.pos < f32(141.0):
+    cold_step(f32(1.60), f32(1.60))
+r = cold_step(f32(1.60), f32(1.60))
+exp_mix = ratio_of(f32(1.60), f32(1.75))                  # ~ +9.4 %
+check("T18 ab 141 mm: Achse A aus Historie (Mischwert, deutlich > 0)",
+      float(r) > 5.0 and abs(float(r) - exp_mix) < 3.0,
+      f"r={float(r):.2f}, erwartet ~{exp_mix:.2f}")
+
+# Phase 3: bis B-Abdeckung (pos >= ~215), dann ist die Korrektur komplett
+# historiebasiert; ein Sprung des AKTUELLEN Frames aendert die Korrektur
+# NICHT sofort (latest_axes ist pop-basiert)
+while m.pos < f32(215.0):
+    cold_step(f32(1.60), f32(1.60))
+r_hist = cold_step(f32(1.60), f32(1.60))
+exp_full = ratio_of(f32(1.60), f32(1.60))                 # ~ +19.6 %
+check("T18 ab 215 mm: vollstaendig historiebasiert (beide Pipes gefuellt)",
+      abs(float(r_hist) - exp_full) < 2.0 and float(r_hist) > 15.0,
+      f"r={float(r_hist):.2f}, erwartet ~{exp_full:.2f}")
+r_after_jump = cold_step(f32(1.75), f32(1.75))            # aktueller Frame springt
+check("T18 Frame-Sprung aendert Korrektur NICHT sofort (pop-basiertes latest)",
+      abs(float(r_after_jump) - float(r_hist)) < 1.5,
+      f"vor={float(r_hist):.2f}, nach={float(r_after_jump):.2f}")
+check("T18 Clamp korrekt (Wert <= +20 %)", float(r_hist) <= 20.0 + 1e-6)
+
 # --- Summary ------------------------------------------------------------------
 print("\n" + "=" * 74)
 failed = [r for r in results if r[1] == FAIL]
