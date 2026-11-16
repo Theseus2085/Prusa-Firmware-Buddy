@@ -112,15 +112,16 @@ public:
   static float latest_axes_mm[sensor_count]; ///< Most recently popped aligned samples
   static float last_average_area;            ///< Most recently computed average integral area
 
-  // RAM budget: entry = 36 bytes. Sized from print-speed analysis at 80 % of MK4
-  // maximum (200 mm/s path, ~17 mm3/s => 7 mm/s filament feed):
+  // RAM budget: entry = 36 bytes. Analysis at 80 % of MK4 maximum
+  // (200 mm/s path, ~17 mm3/s => 7 mm/s filament feed):
   //   - segmented moves (>=1 mm E/segment): <= 7 entries/s
   //   - slicer-native curve/detail bursts:   up to ~400 entries/s
   //   - flush drain (batch 48 @ ~6.1 Hz):    ~293 entries/s > sustained worst case
-  //   - buffer only bridges one flush interval (~66) + ~1 s host stall (200)
-  // => 200 entries (7.2 KB). Larger buffers starve the newlib heap (PrusaConnect
-  //    TLS needs the RAM at boot).
-  static constexpr uint16_t log_capacity = 200;
+  //   - buffer only bridges one flush interval (~66) + host stalls
+  // => 200 entries would suffice analytically; raised to 280 (~10 KB) by choice
+  //    for extra host-stall headroom. Heap tail stays ~75 KB (PrusaConnect
+  //    disabled, see ProjectOptions.cmake).
+  static constexpr uint16_t log_capacity = 280;
   static FilLogEntry log_array[log_capacity];
   static uint16_t log_count;
   static uint16_t log_dropped;   // entries discarded because the buffer was full
