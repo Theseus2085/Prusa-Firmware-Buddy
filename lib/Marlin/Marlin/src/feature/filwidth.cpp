@@ -65,6 +65,17 @@ uint16_t FilamentWidthSensor::log_dropped = 0;
 bool FilamentWidthSensor::logging = false;
 FilLogEntry FilamentWidthSensor::log_array[FilamentWidthSensor::log_capacity] = { {0} };
 
+uint16_t FilamentWidthSensor::finish_logging() {
+  logging = false;
+  const uint16_t flushed = flush_log(log_capacity);
+  if (log_dropped) {
+    SERIAL_ECHOLNPAIR("FWLOG,warn,dropped=", log_dropped);
+    log_dropped = 0;
+  }
+  SERIAL_ECHOLNPAIR("FWLOG,logging_stopped,entries=", flushed);
+  return flushed;
+}
+
 uint16_t FilamentWidthSensor::flush_log(const uint16_t max_entries) {
   if (!log_count || !max_entries) return 0;
 

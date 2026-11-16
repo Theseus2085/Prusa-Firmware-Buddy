@@ -77,7 +77,8 @@ struct FilLogEntry {
   float y;               ///< target Y of the block (mm)
   float e_factor;        ///< applied E factor (flow * volumetric multiplier)
   int32_t msteps_raw;    ///< uncorrected E msteps requested by the block (de)
-  uint32_t msteps_corr;  ///< corrected E msteps as executed (de * e_factor, rounded)
+  int32_t msteps_corr;   ///< corrected E msteps as executed (de * e_factor, rounded,
+                         ///< sign of de preserved so retractions log negative)
   float axis_a_mm;       ///< axis 1 diameter at the nozzle when the block was planned
   float axis_b_mm;       ///< axis 2 diameter at the nozzle when the block was planned
   float ellipse_area;    ///< length-weighted average cross-section area over the block (mm^2)
@@ -126,6 +127,17 @@ public:
   static uint16_t log_count;
   static uint16_t log_dropped;   // entries discarded because the buffer was full
   static bool logging;
+
+  /**
+   * @brief Stops logging, flushes the remainder and prints the stop/drop markers.
+   *
+   * Shared by M407 L0, M405 (sensor session reset) and the print-end hook in
+   * marlin_server's finalize_print(): a stopped/aborted print never executes
+   * the gcode EOF sequence, so M407 L0 alone cannot end a logging session.
+   * @return Number of entries flushed by this call.
+   * Must be called from the main loop / gcode context, never from the planner.
+   */
+  static uint16_t finish_logging();
 
   /**
    * @brief Streams up to max_entries buffered log rows out over serial (FWLOG lines).

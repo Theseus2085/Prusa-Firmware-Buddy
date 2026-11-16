@@ -51,6 +51,12 @@ void GcodeSuite::M405() {
   if (parser.seenval('D'))
     filwidth.set_delay_cm(parser.value_byte());
 
+  // A fresh sensor session also ends any logging session still running from a
+  // previous (possibly aborted) print - otherwise rows logged before the next
+  // M407 L1 contaminate the following capture.
+  if (FilamentWidthSensor::logging)
+    FilamentWidthSensor::finish_logging();
+
   filwidth.enable(true);
 }
 
@@ -83,13 +89,8 @@ void GcodeSuite::M407() {
       FilamentWidthSensor::log_dropped = 0;
       SERIAL_ECHOLNPGM("FWLOG,time_ms,x_mm,y_mm,e_factor,msteps_raw,msteps_corr,axis_a_mm,axis_b_mm,ellipse_area_mm2");
     } else {
-      FilamentWidthSensor::logging = false;
-      const uint16_t flushed = FilamentWidthSensor::flush_log(FilamentWidthSensor::log_capacity);
-      if (FilamentWidthSensor::log_dropped) {
-        SERIAL_ECHOLNPAIR("FWLOG,warn,dropped=", FilamentWidthSensor::log_dropped);
-        FilamentWidthSensor::log_dropped = 0;
-      }
-      SERIAL_ECHOLNPAIR("FWLOG,logging_stopped,entries=", flushed);
+      // L0: stop + flush remainder (same path the print-end hook uses)
+      FilamentWidthSensor::finish_logging();
     }
   } else if (parser.seen('D')) {
     const uint16_t flushed = FilamentWidthSensor::flush_log(FilamentWidthSensor::log_capacity);

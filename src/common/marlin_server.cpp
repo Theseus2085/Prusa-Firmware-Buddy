@@ -47,6 +47,7 @@
 #include "../Marlin/src/module/printcounter.h"
 #include "../Marlin/src/feature/babystep.h"
 #include "../Marlin/src/feature/bedlevel/bedlevel.h"
+#include "../Marlin/src/feature/filwidth/filwidth.h"
 #include "../Marlin/src/feature/input_shaper/input_shaper.hpp"
 #include "../Marlin/src/feature/pause.h"
 #include "../Marlin/src/feature/prusa/measure_axis.h"
@@ -812,6 +813,13 @@ void static finalize_print(bool finished) {
 #endif
     // Reset IS at the end of the print
     input_shaper::init();
+
+#if ENABLED(FILAMENT_WIDTH_SENSOR)
+    // End any FWLOG streaming session: a stopped/aborted print never executes
+    // the gcode EOF sequence, so the M407 L0 injected there cannot run either.
+    if (FilamentWidthSensor::logging)
+        FilamentWidthSensor::finish_logging();
+#endif
 
     media_prefetch.stop();
 

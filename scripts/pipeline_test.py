@@ -560,7 +560,10 @@ def planner_chain(de, ratio_pct, volumetric, flow_pct=100.0, nominal=1.75):
     else:
         mult = corr
     e_factor = f32(f32(f32(flow_pct) * f32(0.01)) * mult)
-    corr_steps = int(abs(f32(f32(float(de)) * e_factor)) + f32(0.5))
+    # Firmware (planner.cpp, seit Testdruck-Fix): e_msteps = |de*e_factor|+0.5,
+    # im LOG mit Vorzeichen von de (Retraktion loggt negativ, nicht +3214 bei -3040)
+    mag = int(abs(f32(f32(float(de)) * e_factor)) + f32(0.5))
+    corr_steps = -mag if de < 0 else mag
     return float(e_factor), int(de), corr_steps
 ef, raw, corr = planner_chain(260, 0.3, volumetric=False)
 check("T16 Beispiel 260 Msteps x 1.003 -> 261", raw == 260 and corr == 261,
@@ -571,6 +574,10 @@ check("T16 1mm-Block mit -5.4784 % (1.80mm-Fall)", abs((corr - raw) / raw + 0.05
 ef, raw, corr = planner_chain(50, 20.0, volumetric=False)
 check("T16 Clamped-Input (+20 %) auf winzigem Block", abs(ef - 1.2) < 1e-5 and corr == 60,
       f"e_factor={ef:.5f} {raw}->{corr}")
+ef, raw, corr = planner_chain(-3040, 6.0, volumetric=False)   # Abbruch-Retraktion vom Testdruck
+check("T16 Retraction behaelt Vorzeichen (Testdruck-Fall -3040)",
+      corr < 0 and abs(abs(corr) - 3222) <= 2,
+      f"{raw}->{corr}")
 
 # --- T17: long-run stability ---------------------------------------------------------
 print("\nT17: Langzeitstabilitaet (10.000 Schritte, zufaellige Durchmesser)")

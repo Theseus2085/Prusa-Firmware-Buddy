@@ -1450,7 +1450,10 @@ bool Planner::_populate_block(block_t *const block,
             entry.y            = target_float.y;
             entry.e_factor     = e_factor[extruder];
             entry.msteps_raw   = de;
-            entry.msteps_corr  = e_msteps;
+            // Keep the direction sign: retractions (de < 0) must log a negative
+            // corrected step count too, otherwise capture data shows them as
+            // extrusion (observed as -3040 -> +3214 on the first test print).
+            entry.msteps_corr  = (de < 0) ? -int32_t(e_msteps) : int32_t(e_msteps);
             entry.axis_a_mm    = FilamentWidthSensor::latest_axes_mm[0];
             entry.axis_b_mm    = FilamentWidthSensor::latest_axes_mm[1];
             entry.ellipse_area = FilamentWidthSensor::last_average_area;
