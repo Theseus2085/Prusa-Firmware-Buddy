@@ -82,6 +82,10 @@ struct FilLogEntry {
   float axis_a_mm;       ///< axis 1 diameter at the nozzle when the block was planned
   float axis_b_mm;       ///< axis 2 diameter at the nozzle when the block was planned
   float ellipse_area;    ///< length-weighted average cross-section area over the block (mm^2)
+  float z_mm;            ///< target Z of the block (mm) - direct layer assignment
+  uint32_t block_seq;    ///< session-monotonic sequence number; gaps reveal dropped entries
+  float cum_e_mm;        ///< cumulative signed filament position since logging start (mm)
+  uint8_t flags;         ///< bit 0: travel block (de == 0 with XY movement, M407 T1)
 };
 
 class FilamentWidthSensor {
@@ -113,13 +117,14 @@ public:
   static float latest_axes_mm[sensor_count]; ///< Most recently popped aligned samples
   static float last_average_area;            ///< Most recently computed average integral area
 
-  // RAM budget: entry = 36 bytes. Analysis at 80 % of MK4 maximum
-  // (200 mm/s path, ~17 mm3/s => 7 mm/s filament feed):
+  // RAM budget: entry = 52 bytes (49 B payload + 3 B padding; was 36 B before the
+  // z_mm/block_seq/cum_e_mm/flags extension, +4.5 KB total). Analysis at 80 % of MK4
+  // maximum (200 mm/s path, ~17 mm3/s => 7 mm/s filament feed):
   //   - segmented moves (>=1 mm E/segment): <= 7 entries/s
   //   - slicer-native curve/detail bursts:   up to ~400 entries/s
   //   - flush drain (batch 48 @ ~6.1 Hz):    ~293 entries/s > sustained worst case
   //   - buffer only bridges one flush interval (~66) + host stalls
-  // => 200 entries would suffice analytically; raised to 280 (~10 KB) by choice
+  // => 200 entries would suffice analytically; raised to 280 by choice
   //    for extra host-stall headroom. Heap tail stays ~75 KB (PrusaConnect
   //    disabled, see ProjectOptions.cmake).
   static constexpr uint16_t log_capacity = 280;
@@ -127,6 +132,27 @@ public:
   static uint16_t log_count;
   static uint16_t log_dropped;   // entries discarded because the buffer was full
   static bool logging;
+  static uint32_t log_block_seq; ///< session-monotonic sequence counter (advances on drops too)
+  static float log_cum_e_mm;     ///< cumulative signed E since logging start (mm)
+  static bool log_travels;       ///< M407 T1: also log de == 0 travel blocks
+
+  /**
+   * @brief Starts a fresh logging session (M407 L1): resets counters, sequence and
+   * cumulative-E origin. The CSV header itself is printed by the gcode layer.
+   */
+  static void start_logging();
+
+  /**
+   * @brief Captures one planner block into the log buffer (planner context, never blocks).
+   *
+   * Called from _populate_block for every E block and - with M407 T1 - additionally
+   * for travel blocks (de == 0 with XY movement, flags bit 0). Sequence numbers count
+   * every candidate entry, so entries lost to a full buffer leave a detectable gap
+   * in block_seq.
+   */
+  static void capture_log_entry(const float x, const float y, const float z,
+      const float e_fac, const int32_t msteps_raw, const int32_t msteps_corr,
+      const float de_mm, const bool travel);
 
   /**
    * @brief Stops logging, flushes the remainder and prints the stop/drop markers.

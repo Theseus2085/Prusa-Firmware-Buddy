@@ -655,6 +655,67 @@ check("T18 Frame-Sprung aendert Korrektur NICHT sofort (pop-basiertes latest)",
       f"vor={float(r_hist):.2f}, nach={float(r_after_jump):.2f}")
 check("T18 Clamp korrekt (Wert <= +20 %)", float(r_hist) <= 20.0 + 1e-6)
 
+# --- T19: log capture semantics (z_mm, block_seq, cum_e_mm, flags, M407 T1) ------
+print("\nT19: Log-Capture-Semantik (block_seq/Drops, cum_e, Travel-Flag T1)")
+
+class LogModel:
+    """Mirrors FilamentWidthSensor::capture_log_entry (filwidth.cpp, 10113+)."""
+    def __init__(self, capacity=280):
+        self.capacity = capacity
+        self.start_logging()
+
+    def start_logging(self):
+        self.logging = True
+        self.buf = []
+        self.dropped = 0
+        self.seq = 0
+        self.cum_e = 0.0
+
+    def capture(self, x, y, z, e_fac, msteps_raw, msteps_corr, de_mm, travel=False):
+        if not self.logging:
+            return
+        self.seq += 1            # advances even on drop -> gap = drop signal
+        self.cum_e += de_mm
+        if len(self.buf) >= self.capacity:
+            self.dropped += 1
+            return
+        self.buf.append((x, y, z, e_fac, msteps_raw, msteps_corr,
+                         self.seq, self.cum_e, 1 if travel else 0))
+
+lm = LogModel(capacity=4)
+lm.capture(10, 20, 0.2, 1.0, 100, 100, 100.0 / 1520.0)
+lm.capture(10, 30, 0.2, 1.1, 200, 220, 200.0 / 1520.0)
+check("T19 seq monoton ab 1, cum_e in mm", lm.buf[0][6] == 1 and lm.buf[1][6] == 2
+      and abs(lm.buf[1][7] - 300.0 / 1520.0) < 1e-9)
+
+# Retraction: negative de_mm reduces cum_e, corrected msteps keep the sign
+lm.capture(10, 30, 0.2, 1.0, -80, -80, -80.0 / 1520.0)
+check("T19 Retraktion: cum_e sinkt, msteps_corr negativ",
+      lm.buf[2][7] < lm.buf[1][7] and lm.buf[2][5] == -80)
+
+# Travel block (M407 T1): de == 0 -> cum_e unchanged, flags bit 0 set
+cum_before = lm.buf[-1][7]
+lm.capture(50, 30, 0.2, 1.0, 0, 0, 0.0, travel=True)
+check("T19 Travel: cum_e unveraendert, flags=1",
+      lm.buf[3][7] == cum_before and lm.buf[3][8] == 1)
+
+# Overflow: capacity 4 reached -> drops create seq gaps that survive the flush
+lm.capture(60, 30, 0.2, 1.0, 50, 50, 50.0 / 1520.0)   # seq 5 -> dropped
+lm.capture(60, 40, 0.4, 1.0, 60, 60, 60.0 / 1520.0)   # seq 6 -> dropped
+lm.buf.clear()                                        # flush_log drained the buffer
+lm.capture(60, 50, 0.4, 1.0, 70, 70, 70.0 / 1520.0)   # seq 7 -> buffered again
+check("T19 Drops: seq-Sprung 4 -> 7 im CSV (2 verloren), dropped=2",
+      lm.dropped == 2 and lm.buf[-1][6] == 7 and len(lm.buf) == 1)
+
+# z_mm passes through per block (layer change visible in the log)
+check("T19 z_mm je Block (neue Schicht 0.4 im Log)", lm.buf[-1][2] == 0.4)
+
+# Fresh session (M407 L1) resets seq, cum_e and the drop counter
+lm.start_logging()
+lm.capture(0, 0, 0.2, 1.0, 10, 10, 10.0 / 1520.0)
+check("T19 M407 L1-Reset: seq und cum_e starten neu",
+      lm.buf[0][6] == 1 and abs(lm.buf[0][7] - 10.0 / 1520.0) < 1e-9 and lm.dropped == 0)
+
 # --- Summary ------------------------------------------------------------------
 print("\n" + "=" * 74)
 failed = [r for r in results if r[1] == FAIL]

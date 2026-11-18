@@ -2,10 +2,10 @@
 """
 fwlog_graph.py - render graphs from captured FWLOG filament-sensor data
 
-Input:  a *_fwlog.csv produced by fwlog_capture.py (columns time_ms, x_mm,
-        y_mm, e_factor, msteps_raw, msteps_corr, axis_a_mm, axis_b_mm,
-        ellipse_area_mm2). With --raw you can feed the raw log directly;
-        FWLOG rows are filtered on the fly.
+Input:  a *_fwlog.csv produced by fwlog_capture.py. Firmware 10113+ appends
+        z_mm, block_seq, cum_e_mm, flags (travel rows have flags bit 0 set and
+        are skipped here); older 9-column files keep working. With --raw you
+        can feed the raw log directly; FWLOG rows are filtered on the fly.
 
 Output (PNG, 150 dpi, into --out-dir, default: beside the CSV):
   graph_diameters.png   axis A/B + equivalent diameter vs time, nominal line
@@ -33,7 +33,13 @@ COLS = ["time_ms", "x_mm", "y_mm", "e_factor", "msteps_raw",
 
 
 def load_rows(path):
-    """Read a FWLOG csv (or raw log with FWLOG, prefix) into a dict of columns."""
+    """Read a FWLOG csv (or raw log with FWLOG, prefix) into a dict of columns.
+
+    Accepts both the legacy 9-column format and the 13-column format of
+    firmware 10113+ (z_mm, block_seq, cum_e_mm, flags); travel rows (flags
+    bit 0 set, only present with M407 T1) are skipped - the graphs show
+    extrusion blocks only.
+    """
     rows = []
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -47,12 +53,15 @@ def load_rows(path):
                 continue
             else:
                 parts = line.split(",")
-            if len(parts) != 9:
+            if len(parts) < 9:
                 continue
             try:
-                rows.append([float(p) for p in parts])
+                vals = [float(p) for p in parts]
             except ValueError:
                 continue
+            if len(vals) >= 13 and (int(vals[12]) & 1):
+                continue  # travel block (M407 T1)
+            rows.append(vals[:9])
     if not rows:
         bail(f"no FWLOG data rows found in {path}")
     data = np.array(rows, dtype=np.float64)

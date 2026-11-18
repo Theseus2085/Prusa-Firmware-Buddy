@@ -3,8 +3,10 @@
 fwlog_capture.py - capture FWLOG filament-sensor data from the printer over USB
 
 The printer firmware (6.3.3-SENS1+) streams one CSV row per planner block as
-    FWLOG,time_ms,x_mm,y_mm,e_factor,msteps_raw,msteps_corr,axis_a_mm,axis_b_mm,ellipse_area_mm2
+    FWLOG,time_ms,x_mm,y_mm,e_factor,msteps_raw,msteps_corr,axis_a_mm,axis_b_mm,ellipse_area_mm2,z_mm,block_seq,cum_e_mm,flags
 while logging is active (M407 L1 ... M407 L0/D, injected by segment_gcode.py).
+Firmware 10113+ appends z_mm/block_seq/cum_e_mm/flags; older 9-column rows are
+still accepted (the CSV header adapts to whichever width the firmware sends).
 
 Modes:
   --list                     list available serial ports (find the printer)
@@ -29,7 +31,16 @@ import time
 from datetime import datetime
 
 CSV_HEADER = ["time_ms", "x_mm", "y_mm", "e_factor", "msteps_raw",
-              "msteps_corr", "axis_a_mm", "axis_b_mm", "ellipse_area_mm2"]
+              "msteps_corr", "axis_a_mm", "axis_b_mm", "ellipse_area_mm2",
+              "z_mm", "block_seq", "cum_e_mm", "flags"]
+MIN_FIELDS = 9  # firmware <= 10112 sends exactly the first 9 columns
+
+
+def header_for(n_fields):
+    """Column names for a data row of the given width (9 = old, 13 = 10113+)."""
+    if n_fields < len(CSV_HEADER):
+        return CSV_HEADER[:n_fields]
+    return CSV_HEADER + [f"col{i}" for i in range(len(CSV_HEADER), n_fields)]
 
 
 def bail(msg):
@@ -63,7 +74,7 @@ class FwlogFilter:
         self.dump_info = None
         self._csv = open(csv_path, "w", newline="", encoding="utf-8")
         self._w = csv.writer(self._csv)
-        self._w.writerow(CSV_HEADER)
+        self._header_written = False  # written from the first data row's width
 
     def feed(self, line):
         """One stripped line from the printer. Returns True if it was FWLOG."""
@@ -84,7 +95,10 @@ class FwlogFilter:
             pass  # firmware CSV header echo
         else:
             row = payload.split(",")
-            if len(row) == 9:
+            if len(row) >= MIN_FIELDS:
+                if not self._header_written:
+                    self._w.writerow(header_for(len(row)))
+                    self._header_written = True
                 self._w.writerow(row)
                 self.entries += 1
             else:

@@ -80,14 +80,20 @@ void GcodeSuite::M406() {
  *  L<0|1> - Stop/Start logging (entries stream out as FWLOG lines during the
  *           print; a small remainder is flushed on stop)
  *  D      - Flush all buffered log rows to serial output immediately
+ *  T<0|1> - Travel-block logging: with T1, de == 0 moves with XY movement are
+ *           logged too (flags bit 0, msteps 0, edge-held axis values).
+ *           Default off (E blocks only). Combinable: "M407 L1 T1".
  */
 void GcodeSuite::M407() {
+  const bool seen_t = parser.seen('T');
+  if (seen_t) {
+    FilamentWidthSensor::log_travels = parser.value_bool();
+    SERIAL_ECHOLNPAIR("FWLOG,travels=", FilamentWidthSensor::log_travels ? 1 : 0);
+  }
   if (parser.seen('L')) {
     if (parser.value_bool()) {
-      FilamentWidthSensor::logging = true;
-      FilamentWidthSensor::log_count = 0;
-      FilamentWidthSensor::log_dropped = 0;
-      SERIAL_ECHOLNPGM("FWLOG,time_ms,x_mm,y_mm,e_factor,msteps_raw,msteps_corr,axis_a_mm,axis_b_mm,ellipse_area_mm2");
+      FilamentWidthSensor::start_logging();
+      SERIAL_ECHOLNPGM("FWLOG,time_ms,x_mm,y_mm,e_factor,msteps_raw,msteps_corr,axis_a_mm,axis_b_mm,ellipse_area_mm2,z_mm,block_seq,cum_e_mm,flags");
     } else {
       // L0: stop + flush remainder (same path the print-end hook uses)
       FilamentWidthSensor::finish_logging();
@@ -99,7 +105,7 @@ void GcodeSuite::M407() {
       FilamentWidthSensor::log_dropped = 0;
     }
     SERIAL_ECHOLNPAIR("FWLOG,dump_complete,entries=", flushed);
-  } else {
+  } else if (!seen_t) {
     SERIAL_ECHOLNPAIR("Filament dia (measured mm):", filwidth.measured_mm);
   }
 }

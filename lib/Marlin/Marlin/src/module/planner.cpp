@@ -1441,29 +1441,17 @@ bool Planner::_populate_block(block_t *const block,
 
     #if ENABLED(FILAMENT_WIDTH_SENSOR)
     // Capture the log entry after e_msteps is known so each record carries both
-    // the uncorrected (de) and the corrected (e_msteps) step count.
-    if (filwidth.enabled && de && FilamentWidthSensor::logging) {
-        if (FilamentWidthSensor::log_count < FilamentWidthSensor::log_capacity) {
-            FilLogEntry &entry = FilamentWidthSensor::log_array[FilamentWidthSensor::log_count];
-            entry.time_ms      = millis();
-            entry.x            = target_float.x;
-            entry.y            = target_float.y;
-            entry.e_factor     = e_factor[extruder];
-            entry.msteps_raw   = de;
-            // Keep the direction sign: retractions (de < 0) must log a negative
-            // corrected step count too, otherwise capture data shows them as
-            // extrusion (observed as -3040 -> +3214 on the first test print).
-            entry.msteps_corr  = (de < 0) ? -int32_t(e_msteps) : int32_t(e_msteps);
-            entry.axis_a_mm    = FilamentWidthSensor::latest_axes_mm[0];
-            entry.axis_b_mm    = FilamentWidthSensor::latest_axes_mm[1];
-            entry.ellipse_area = FilamentWidthSensor::last_average_area;
-            FilamentWidthSensor::log_count++;
-        }
-        else {
-            // Buffer full (host not draining fast enough): discard the entry and
-            // account for it - never block or wrap here, this is planner context.
-            FilamentWidthSensor::log_dropped++;
-        }
+    // the uncorrected (de) and the corrected (e_msteps) step count. With M407 T1
+    // active, travel blocks (de == 0 with XY movement) are captured too and
+    // flagged (bit 0); their axis/area values are edge-held by design.
+    if (filwidth.enabled && FilamentWidthSensor::logging
+        && (de || (FilamentWidthSensor::log_travels && (da || db)))) {
+      FilamentWidthSensor::capture_log_entry(
+        target_float.x, target_float.y, target_float.z,
+        e_factor[extruder], de,
+        (de < 0) ? -int32_t(e_msteps) : int32_t(e_msteps),
+        de * mm_per_mstep[E_AXIS_N(extruder)],
+        de == 0);
     }
     #endif
 #else

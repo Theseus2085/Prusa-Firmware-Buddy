@@ -63,7 +63,50 @@ float  FilamentWidthSensor::last_average_area = 0.0f;
 uint16_t FilamentWidthSensor::log_count = 0;
 uint16_t FilamentWidthSensor::log_dropped = 0;
 bool FilamentWidthSensor::logging = false;
+uint32_t FilamentWidthSensor::log_block_seq = 0;
+float FilamentWidthSensor::log_cum_e_mm = 0.0f;
+bool FilamentWidthSensor::log_travels = false;
 FilLogEntry FilamentWidthSensor::log_array[FilamentWidthSensor::log_capacity] = { {0} };
+
+void FilamentWidthSensor::start_logging() {
+  logging = true;
+  log_count = 0;
+  log_dropped = 0;
+  log_block_seq = 0;
+  log_cum_e_mm = 0.0f;
+}
+
+void FilamentWidthSensor::capture_log_entry(const float x, const float y, const float z,
+    const float e_fac, const int32_t msteps_raw, const int32_t msteps_corr,
+    const float de_mm, const bool travel) {
+  if (!logging) return;
+
+  // The sequence counter advances for every candidate block, including entries
+  // lost to a full buffer: a gap in the emitted block_seq is the drop signal.
+  ++log_block_seq;
+  log_cum_e_mm += de_mm;
+
+  if (log_count >= log_capacity) {
+    ++log_dropped;   // never block or wrap here, this is planner context
+    return;
+  }
+
+  FilLogEntry &entry = log_array[log_count];
+  entry.time_ms      = millis();
+  entry.x            = x;
+  entry.y            = y;
+  entry.z_mm         = z;
+  entry.e_factor     = e_fac;
+  entry.msteps_raw   = msteps_raw;
+  entry.msteps_corr  = msteps_corr;
+  entry.axis_a_mm    = latest_axes_mm[0];
+  entry.axis_b_mm    = latest_axes_mm[1];
+  entry.ellipse_area = last_average_area;
+  entry.block_seq    = log_block_seq;
+  entry.cum_e_mm     = log_cum_e_mm;
+  entry.flags        = travel ? 0x01 : 0x00;
+  ++log_count;
+}
 
 uint16_t FilamentWidthSensor::finish_logging() {
   logging = false;
@@ -92,6 +135,10 @@ uint16_t FilamentWidthSensor::flush_log(const uint16_t max_entries) {
     SERIAL_ECHOPAIR(",", entry.axis_a_mm);
     SERIAL_ECHOPAIR(",", entry.axis_b_mm);
     SERIAL_ECHOPAIR(",", entry.ellipse_area);
+    SERIAL_ECHOPAIR(",", entry.z_mm);
+    SERIAL_ECHOPAIR(",", entry.block_seq);
+    SERIAL_ECHOPAIR(",", entry.cum_e_mm);
+    SERIAL_ECHOPAIR(",", entry.flags);
     SERIAL_EOL();
   }
 
@@ -104,6 +151,7 @@ uint16_t FilamentWidthSensor::flush_log(const uint16_t max_entries) {
 
 namespace {
   static_assert(FILWIDTH_SENSOR_DIGITS == 5, "Filwidth wire protocol expects 5 digits per axis.");
+  static_assert(sizeof(FilLogEntry) == 52, "FilLogEntry RAM budget: 49 B payload + 3 B padding = 52 B (280 entries = 14.6 KB).");
   static_assert(FILWIDTH_SENSOR_QUEUE_BIN_MM > 0, "FILWIDTH_SENSOR_QUEUE_BIN_MM must be positive.");
   static_assert(FILWIDTH_SENSOR_QUEUE_CAPACITY > 0 && FILWIDTH_SENSOR_QUEUE_CAPACITY <= 65535, "FILWIDTH_SENSOR_QUEUE_CAPACITY must fit queue index type.");
   static_assert(FILWIDTH_SENSOR_QUEUE_CAPACITY > (FILWIDTH_SENSOR_MAX_DELAY_MM / FILWIDTH_SENSOR_QUEUE_BIN_MM) + 4,
